@@ -557,7 +557,7 @@
     <script>
     const userId = localStorage.getItem('userId');
     const userEmail = localStorage.getItem('email') || "user@mublog.com";
-    const API_BASE = "https://mublog-backend.onrender.com";
+    const API_BASE = "https://mublog-backend.onrender.com/api";
 
     if (!userId) window.location.href = 'login.html';
     document.getElementById('navUsername').innerText = localStorage.getItem('username') || "User";
@@ -1135,4 +1135,5 @@ async function loadOrderHistory() {
 
     </script>
 </body>
+
 </html>
