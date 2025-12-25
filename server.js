@@ -244,32 +244,68 @@ app.get('/api/auth/user/:userId', async (req, res) => {
 });
 
 // Topup - FIXED ID HANDLING
+// REPLACE the topup route in server.js (around line 167) with this enhanced version:
+
 app.post('/api/auth/topup', async (req, res) => {
     try {
         const { userId, amount } = req.body;
         
-        console.log('💰 Topup request:', { userId, amount }); // Debug
+        console.log('💰 Topup request received:', { userId, amount, type: typeof userId }); // Debug
         
-        if (isNaN(amount) || amount <= 0) {
+        // Validate amount
+        if (!amount || isNaN(amount) || amount <= 0) {
+            console.log('❌ Invalid amount');
             return res.status(400).json({ msg: "Invalid amount" });
         }
         
-        const userIdObj = toObjectId(userId);
+        // Validate userId
+        if (!userId) {
+            console.log('❌ No userId provided');
+            return res.status(400).json({ msg: "User ID is required" });
+        }
         
+        // Convert to ObjectId
+        let userIdObj;
+        try {
+            userIdObj = toObjectId(userId);
+            console.log('✅ Converted userId:', userIdObj);
+        } catch (err) {
+            console.log('❌ Failed to convert userId:', err);
+            return res.status(400).json({ msg: "Invalid user ID format" });
+        }
+        
+        // Check if user exists first
+        const user = await getCollection('users').findOne({ _id: userIdObj });
+        console.log('👤 User found:', user ? 'Yes' : 'No');
+        
+        if (!user) {
+            return res.status(404).json({ msg: "User not found" });
+        }
+        
+        // Update balance
         const result = await getCollection('users').updateOne(
             { _id: userIdObj },
             { $inc: { balance: parseFloat(amount) } }
         );
         
-        console.log('✅ Topup result:', result); // Debug
+        console.log('✅ Update result:', result); // Debug
         
         if (result.modifiedCount === 0) {
-            return res.status(404).json({ msg: "User not found" });
+            console.log('⚠️ No documents were modified');
+            return res.status(500).json({ msg: "Failed to update balance" });
         }
         
-        res.json({ msg: `Successfully added ₦${amount}` });
+        // Get updated user data
+        const updatedUser = await getCollection('users').findOne({ _id: userIdObj });
+        console.log('💰 New balance:', updatedUser.balance);
+        
+        res.json({ 
+            msg: `Successfully added ₦${amount}`,
+            newBalance: updatedUser.balance 
+        });
+        
     } catch (err) {
-        console.error('Topup error:', err);
+        console.error('❌ Topup error:', err);
         res.status(500).json({ error: err.message });
     }
 });
