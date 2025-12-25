@@ -767,130 +767,240 @@ async function loadOrderHistory() {
     }
 
     async function loadSmsServices() {
-        try {
-            const res = await fetch(`${API_BASE}/sms/available-services`);
-            const services = await res.json();
-            const serviceSelect = document.getElementById('smsServiceSelect');
-            serviceSelect.innerHTML = '<option value="">Select service</option>';
-            services.forEach(s => {
-                const opt = document.createElement('option');
-                opt.value = s.service_name;
-                opt.textContent = s.display_name;
-                serviceSelect.appendChild(opt);
-            });
-        } catch (e) { console.error("SMS services load failed", e); }
+    try {
+        console.log('📱 Loading SMS services...');
+        const res = await fetch(`${API_BASE}/sms/available-services`);
+        const services = await res.json();
+        
+        console.log('📱 SMS Services loaded:', services);
+        
+        const serviceSelect = document.getElementById('smsServiceSelect');
+        
+        if (!services || services.length === 0) {
+            serviceSelect.innerHTML = '<option value="">No services available - Admin needs to add services first</option>';
+            return;
+        }
+        
+        serviceSelect.innerHTML = '<option value="">Select service</option>';
+        services.forEach(s => {
+            const opt = document.createElement('option');
+            opt.value = s.service_name;
+            opt.textContent = s.display_name;
+            serviceSelect.appendChild(opt);
+        });
+        
+        console.log('✅ SMS services loaded successfully');
+    } catch (e) { 
+        console.error("❌ SMS services load failed:", e);
+        document.getElementById('smsServiceSelect').innerHTML = '<option value="">Error loading services</option>';
     }
+}
 
     function handleSmsServiceChange() {
-        const service = document.getElementById('smsServiceSelect').value;
-        if (!service) return;
-        document.getElementById('smsCountrySelect').innerHTML = '<option>Loading...</option>';
-        loadSmsCountries();
+    const service = document.getElementById('smsServiceSelect').value;
+    console.log('📱 Service selected:', service);
+    
+    if (!service) {
+        document.getElementById('smsCountrySelect').innerHTML = '<option value="">-- Select Country --</option>';
+        return;
     }
+    
+    document.getElementById('smsCountrySelect').innerHTML = '<option>Loading countries...</option>';
+    document.getElementById('smsPriceDisplay').innerText = 'Price: ₦0';
+    loadSmsCountries();
+}
 
     async function loadSmsCountries() {
-        const service = document.getElementById('smsServiceSelect').value;
-        const countrySelect = document.getElementById('smsCountrySelect');
-        try {
-            const res = await fetch(`${API_BASE}/sms/live-config/${service}`);
-            const results = await res.json();
-            if (!results.length) {
-                countrySelect.innerHTML = '<option>No stock available</option>';
-                return;
-            }
-            countrySelect.innerHTML = results.map(c =>
-                `<option value="${c.country}|${c.operator}" data-price="${c.price}">
-                    ${c.country.toUpperCase()} (${c.operator}) – ₦${c.price} [${c.stock}]
-                </option>`
-            ).join('');
-            updateSmsPriceDisplay();
-        } catch (e) { countrySelect.innerHTML = '<option>Error loading</option>'; }
+    const service = document.getElementById('smsServiceSelect').value;
+    const countrySelect = document.getElementById('smsCountrySelect');
+    
+    console.log('🌍 Loading countries for service:', service);
+    
+    try {
+        const res = await fetch(`${API_BASE}/sms/live-config/${service}`);
+        const results = await res.json();
+        
+        console.log('🌍 Countries loaded:', results);
+        
+        if (!results || results.length === 0) {
+            countrySelect.innerHTML = '<option>❌ No stock available for this service</option>';
+            document.getElementById('smsPriceDisplay').innerHTML = '<span style="color: #ef4444;">No stock available</span>';
+            return;
+        }
+        
+        // Sort by price (cheapest first)
+        results.sort((a, b) => a.price - b.price);
+        
+        countrySelect.innerHTML = results.map(c =>
+            `<option value="${c.country}|${c.operator}" data-price="${c.price}">
+                ${c.country.toUpperCase()} (${c.operator}) — ₦${c.price.toLocaleString()} [${c.stock} available]
+            </option>`
+        ).join('');
+        
+        updateSmsPriceDisplay();
+        console.log('✅ Countries loaded successfully');
+        
+    } catch (e) { 
+        console.error('❌ Load countries error:', e);
+        countrySelect.innerHTML = '<option>Error loading countries</option>'; 
     }
+}
 
     function updateSmsPriceDisplay() {
-        const select = document.getElementById('smsCountrySelect');
-        const opt = select.options[select.selectedIndex];
-        const price = opt?.dataset.price || 0;
-        document.getElementById('smsPriceDisplay').innerText = `Price: ₦${parseInt(price).toLocaleString()}`;
-    }
+    const select = document.getElementById('smsCountrySelect');
+    const opt = select.options[select.selectedIndex];
+    const price = opt?.dataset.price || 0;
+    document.getElementById('smsPriceDisplay').innerHTML = `<strong style="color: #10b981; font-size: 18px;">Price: ₦${parseInt(price).toLocaleString()}</strong>`;
+}
 
-    async function purchaseSms() {
+async function purchaseSms() {
     const service = document.getElementById('smsServiceSelect').value;
     const countryData = document.getElementById('smsCountrySelect').value;
-    if (!service || !countryData) return alert("Select service and country");
+    
+    console.log('📱 Purchase attempt:', { service, countryData });
+    
+    if (!service || !countryData) {
+        alert("⚠️ Please select both service and country");
+        return;
+    }
+    
     const [country, operator] = countryData.split('|');
+    
+    if (!confirm(`Purchase SMS number for ${service}?\nCountry: ${country}\nOperator: ${operator}`)) {
+        return;
+    }
 
     try {
+        console.log('📱 Sending order...');
+        
         const res = await fetch(`${API_BASE}/sms/order`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ userId, service, country, operator })
         });
+        
         const data = await res.json();
+        console.log('📱 Order response:', data);
         
         if (!res.ok) {
-            console.error("SMS Error Response:", data);
-            return alert(data.error || data.message || "Purchase failed. Please try again.");
+            alert("❌ " + (data.error || data.message || "Purchase failed"));
+            return;
         }
 
-        // Success
+        // Success - show result
+        alert("✅ SMS Number purchased!\nPhone: " + data.phone);
+        
         document.getElementById('smsResultBox').style.display = 'block';
         document.getElementById('smsPhone').innerText = data.phone;
-        document.getElementById('smsCodeBox').innerText = 'Waiting...';
+        document.getElementById('smsStatusText').innerText = 'Waiting for SMS...';
+        document.getElementById('smsCodeBox').innerText = 'Waiting for verification code...';
+        
+        // Start polling for SMS code
         pollSmsCode(data.orderId);
+        
+        // Update balance and stats
         updateBalance();
+        loadDashboardStats();
+        
     } catch (e) { 
-        console.error("SMS Purchase Error:", e);
-        alert("Network error: " + e.message); 
+        console.error("❌ SMS Purchase Error:", e);
+        alert("❌ Network error: " + e.message); 
     }
 }
 
-    async function pollSmsCode(orderId) {
-        const interval = setInterval(async () => {
-            try {
-                const res = await fetch(`${API_BASE}/sms/check/${orderId}`);
-                const data = await res.json();
-                if (data.code) {
-                    document.getElementById('smsCodeBox').innerText = `SMS Code: ${data.code}`;
-                    document.getElementById('smsStatusText').innerText = "Code Received!";
-                    clearInterval(interval);
-                    // Refresh SMS history to show the new code
-                    loadSmsHistory();
-                }
-                if (data.status === 'CANCELLED') {
-                    document.getElementById('smsCodeBox').innerText = 'Order cancelled';
-                    clearInterval(interval);
-                    loadSmsHistory();
-                }
-            } catch (e) { console.error("Polling failed"); }
-        }, 5000);
-    }
-
-    async function loadSmsHistory() {
-        const body = document.getElementById('smsHistoryBody');
-        body.innerHTML = '<tr><td colspan="6">Loading...</td></tr>';
+async function pollSmsCode(orderId) {
+    console.log('🔄 Polling for SMS code:', orderId);
+    
+    let attempts = 0;
+    const maxAttempts = 60; // Poll for 5 minutes (every 5 seconds)
+    
+    const interval = setInterval(async () => {
+        attempts++;
+        
         try {
-            const res = await fetch(`${API_BASE}/sms/history/${userId}`);
-            const rows = await res.json();
-            if (rows.length === 0) {
-                body.innerHTML = '<tr><td colspan="6" style="text-align:center; color:#999;">No SMS orders yet</td></tr>';
-                return;
+            const res = await fetch(`${API_BASE}/sms/check/${orderId}`);
+            const data = await res.json();
+            
+            console.log(`🔄 Poll attempt ${attempts}:`, data);
+            
+            if (data.code) {
+                document.getElementById('smsCodeBox').innerText = `✅ SMS Code: ${data.code}`;
+                document.getElementById('smsStatusText').innerText = "✅ Code Received!";
+                document.getElementById('smsStatusText').style.color = '#10b981';
+                clearInterval(interval);
+                loadSmsHistory();
+                
+                // Show success notification
+                alert(`✅ SMS Code Received: ${data.code}`);
             }
-            body.innerHTML = rows.map(o => `
-                <tr>
-                    <td>${new Date(o.created_at).toLocaleDateString()}</td>
-                    <td><strong>${o.service}</strong></td>
-                    <td><code style="background:#eef2ff; padding:4px 8px; border-radius:4px; color:#4f46e5;">${o.phone || 'N/A'}</code></td>
-                    <td>₦${parseInt(o.price).toLocaleString()}</td>
-                    <td><strong style="color:${o.sms_code ? '#10b981' : '#f59e0b'};">${o.sms_code || 'Waiting...'}</strong></td>
-                    <td><span class="status-pill" style="background:${o.status === 'COMPLETED' ? '#d1fae5' : '#fef3c7'}; color:${o.status === 'COMPLETED' ? '#065f46' : '#92400e'};">${o.status}</span></td>
-                </tr>
-            `).join('');
+            
+            if (data.status === 'CANCELLED' || data.status === 'TIMEOUT') {
+                document.getElementById('smsCodeBox').innerText = '❌ Order cancelled or timeout';
+                document.getElementById('smsStatusText').innerText = data.status;
+                clearInterval(interval);
+                loadSmsHistory();
+            }
+            
+            // Stop after max attempts
+            if (attempts >= maxAttempts) {
+                document.getElementById('smsCodeBox').innerText = '⏱️ Timeout - No SMS received';
+                document.getElementById('smsStatusText').innerText = 'Check SMS History';
+                clearInterval(interval);
+            }
+            
         } catch (e) { 
-            console.error('SMS History Error:', e);
-            body.innerHTML = '<tr><td colspan="6" style="text-align:center; color:#ef4444;">Failed to load history</td></tr>'; 
+            console.error("❌ Polling failed:", e);
         }
+    }, 5000); // Check every 5 seconds
+}
+
+async function loadSmsHistory() {
+    const body = document.getElementById('smsHistoryBody');
+    body.innerHTML = '<tr><td colspan="6" style="text-align:center;">Loading...</td></tr>';
+    
+    try {
+        console.log('📜 Loading SMS history for user:', userId);
+        
+        const res = await fetch(`${API_BASE}/sms/history/${userId}`);
+        const rows = await res.json();
+        
+        console.log('📜 SMS History:', rows);
+        
+        if (rows.length === 0) {
+            body.innerHTML = '<tr><td colspan="6" style="text-align:center; color:#999; padding: 40px;">No SMS orders yet. Purchase a number to get started!</td></tr>';
+            return;
+        }
+        
+        body.innerHTML = rows.map(o => {
+            const statusColor = o.status === 'COMPLETED' ? '#10b981' : '#f59e0b';
+            const statusBg = o.status === 'COMPLETED' ? '#d1fae5' : '#fef3c7';
+            
+            return `
+                <tr>
+                    <td>${new Date(o.created_at).toLocaleDateString()} ${new Date(o.created_at).toLocaleTimeString()}</td>
+                    <td><strong>${o.service}</strong> <br><small style="color: #6b7280;">${o.country} / ${o.operator}</small></td>
+                    <td><code style="background:#eef2ff; padding:6px 10px; border-radius:6px; color:#4f46e5; font-weight: 600;">${o.phone || 'N/A'}</code></td>
+                    <td style="font-weight: 700; color: #10b981;">₦${parseInt(o.price).toLocaleString()}</td>
+                    <td>
+                        ${o.sms_code 
+                            ? `<strong style="color:#10b981; font-size: 16px; background: #d1fae5; padding: 8px 12px; border-radius: 6px; display: inline-block;">${o.sms_code}</strong>` 
+                            : '<span style="color:#f59e0b;">⏳ Waiting...</span>'
+                        }
+                    </td>
+                    <td>
+                        <span class="status-pill" style="background:${statusBg}; color:${statusColor}; padding: 6px 12px; border-radius: 20px; font-weight: 700;">
+                            ${o.status}
+                        </span>
+                    </td>
+                </tr>
+            `;
+        }).join('');
+        
+    } catch (e) { 
+        console.error('❌ SMS History Error:', e);
+        body.innerHTML = '<tr><td colspan="6" style="text-align:center; color:#ef4444;">Failed to load history</td></tr>'; 
     }
+}
 
     async function loadBoostServices() {
         const select = document.getElementById('boostService');
@@ -1137,3 +1247,4 @@ async function loadOrderHistory() {
 </body>
 
 </html>
+
