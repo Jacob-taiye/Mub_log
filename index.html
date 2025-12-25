@@ -557,7 +557,7 @@
     <script>
     const userId = localStorage.getItem('userId');
     const userEmail = localStorage.getItem('email') || "user@mublog.com";
-    const API_BASE = "http://localhost:5000/api";
+    const API_BASE = " https://mublog-backend.onrender.com";
 
     if (!userId) window.location.href = 'login.html';
     document.getElementById('navUsername').innerText = localStorage.getItem('username') || "User";
