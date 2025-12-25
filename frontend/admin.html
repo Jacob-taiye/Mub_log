@@ -665,20 +665,47 @@ async function loadAllSales() {
     }
 
     async function topUp(id, name) {
-        const amt = prompt(`Enter Naira amount to add to ${name}:`);
-        if(!amt || isNaN(amt)) return;
-        try {
-            const res = await fetch(`${API_BASE}/auth/topup`, {
-                method: 'POST',
-                headers: getHeaders(),
-                body: JSON.stringify({ userId: id, amount: parseFloat(amt) })
-            });
-            if(res.ok) {
-                alert("Wallet updated!");
-                loadUsers();
-            }
-        } catch (err) { alert("Server error"); }
+    const amt = prompt(`Enter Naira amount to add to ${name}:`);
+    if(!amt || isNaN(amt)) return;
+    
+    const amount = parseFloat(amt);
+    if (amount <= 0) {
+        alert("Amount must be greater than 0");
+        return;
     }
+    
+    try {
+        console.log('Topup request:', { userId: id, amount }); // Debug
+        
+        const res = await fetch(`${API_BASE}/auth/topup`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${localStorage.getItem('token')}`
+            },
+            body: JSON.stringify({ 
+                userId: String(id),  // Ensure it's a string
+                amount: amount 
+            })
+        });
+        
+        console.log('Topup response status:', res.status); // Debug
+        
+        const data = await res.json();
+        console.log('Topup response data:', data); // Debug
+        
+        if(res.ok) {
+            alert("✅ Wallet updated successfully!");
+            loadUsers();
+            loadDashboardStats();
+        } else {
+            alert("❌ Error: " + (data.msg || data.error || "Failed to update wallet"));
+        }
+    } catch (err) {
+        console.error("Topup error:", err);
+        alert("❌ Server error: " + err.message);
+    }
+}
 
     // --- INVENTORY MANAGEMENT ---
     async function loadInventory() {
@@ -823,4 +850,5 @@ async function loadAllSales() {
 </body>
 
 </html>
+
 
