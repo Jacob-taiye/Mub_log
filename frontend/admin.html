@@ -648,22 +648,40 @@ async function loadAllSales() {
 
     // --- USER MANAGEMENT ---
     async function loadUsers() {
-        try {
-            const res = await fetch(`${API_BASE}/auth/users`, { headers: getHeaders() });
-            const users = await res.json();
-            const body = document.getElementById('userTableBody');
-            body.innerHTML = users.map(u => `
+    try {
+        const res = await fetch(`${API_BASE}/auth/users`, { headers: getHeaders() });
+        const users = await res.json();
+        const body = document.getElementById('userTableBody');
+        
+        if (!users || users.length === 0) {
+            body.innerHTML = '<tr><td colspan="5" style="text-align:center; padding:20px;">No users found</td></tr>';
+            return;
+        }
+        
+        body.innerHTML = users.map(u => {
+            // Get the ID - handle both ObjectId and numeric IDs
+            const userId = u._id || u.id;
+            const userIdStr = typeof userId === 'object' ? userId.toString() : String(userId);
+            
+            return `
                 <tr>
-                    <td>#${u.id}</td>
+                    <td><code>${userIdStr.substring(0, 8)}...</code></td>
                     <td><strong>${u.username}</strong></td>
                     <td>${u.email}</td>
-                    <td><span class="balance-amt">₦${parseFloat(u.balance).toLocaleString()}</span></td>
-                    <td><button class="btn-action" onclick="topUp(${u.id}, '${u.username}')">Add Cash</button></td>
+                    <td><span class="balance-amt">₦${parseFloat(u.balance || 0).toLocaleString()}</span></td>
+                    <td>
+                        <button class="btn-action" onclick="topUp('${userIdStr}', '${u.username}')">
+                            Add Cash
+                        </button>
+                    </td>
                 </tr>
-            `).join('');
-        } catch (e) { }
+            `;
+        }).join('');
+    } catch (e) { 
+        console.error('Load users error:', e);
+        document.getElementById('userTableBody').innerHTML = '<tr><td colspan="5">Error loading users</td></tr>';
     }
-
+}
     async function topUp(id, name) {
     const amt = prompt(`Enter Naira amount to add to ${name}:`);
     if(!amt || isNaN(amt)) return;
@@ -850,5 +868,6 @@ async function loadAllSales() {
 </body>
 
 </html>
+
 
 
