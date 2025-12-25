@@ -10,14 +10,24 @@ dotenv.config();
 
 const app = express();
 
-// Middleware
+// ============================================
+// FIXED CORS CONFIGURATION
+// ============================================
 app.use(cors({
     origin: [
-        'https://mublog-frontend.onrender.com', // Your actual frontend URL
-        'http://localhost:3000'
+        'https://mub-log.onrender.com',  // Your actual frontend URL
+        'http://localhost:3000',
+        'http://localhost:5500',
+        'http://127.0.0.1:5500'
     ],
-    credentials: true
+    credentials: true,
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization']
 }));
+
+// Handle preflight requests
+app.options('*', cors());
+
 app.use(express.json());
 
 // ============================================
@@ -66,11 +76,17 @@ class InMemoryCollection {
         if (query._id) {
             results = results.filter(d => d._id == query._id);
         }
+        if (query.email) {
+            results = results.filter(d => d.email === query.email);
+        }
         if (query.category) {
             results = results.filter(d => d.category === query.category);
         }
         if (query.stock && query.stock.$gt !== undefined) {
             results = results.filter(d => d.stock > query.stock.$gt);
+        }
+        if (query.user_id) {
+            results = results.filter(d => d.user_id === query.user_id);
         }
         return {
             toArray: async () => results,
@@ -88,10 +104,15 @@ class InMemoryCollection {
     }
     
     async updateOne(query, update) {
-        const item = this.data.find(d => d._id == query._id);
+        const item = this.data.find(d => d._id == query._id || d.email === query.email);
         if (item && update.$inc) {
             for (let key in update.$inc) {
                 item[key] = (item[key] || 0) + update.$inc[key];
+            }
+        }
+        if (item && update.$set) {
+            for (let key in update.$set) {
+                item[key] = update.$set[key];
             }
         }
         return { modifiedCount: item ? 1 : 0 };
@@ -118,7 +139,7 @@ function getCollection(name) {
 const createToken = (data) => {
     const header = Buffer.from(JSON.stringify({ alg: "HS256", typ: "JWT" })).toString('base64');
     const payload = Buffer.from(JSON.stringify(data)).toString('base64');
-    const signature = crypto.createHmac('sha256', 'your_secret_key')
+    const signature = crypto.createHmac('sha256', process.env.JWT_SECRET || 'your_secret_key')
         .update(`${header}.${payload}`)
         .digest('base64');
     return `${header}.${payload}.${signature}`;
@@ -133,10 +154,16 @@ app.post('/api/auth/register', async (req, res) => {
     try {
         const { username, email, password } = req.body;
         
+        // Check if user exists
+        const existing = await getCollection('users').findOne({ email });
+        if (existing) {
+            return res.status(400).json({ error: "Email already exists" });
+        }
+        
         const salt = await bcryptjs.genSalt(10);
         const hashedPassword = await bcryptjs.hash(password, salt);
         
-        await getCollection('users').insertOne({
+        const result = await getCollection('users').insertOne({
             username,
             email,
             password: hashedPassword,
@@ -145,9 +172,10 @@ app.post('/api/auth/register', async (req, res) => {
             createdAt: new Date()
         });
         
-        res.status(201).json({ msg: "User created successfully!" });
+        res.status(201).json({ msg: "User created successfully!", userId: result.insertedId });
     } catch (err) {
-        res.status(500).json({ error: "Email or Username already exists" });
+        console.error('Register error:', err);
+        res.status(500).json({ error: "Registration failed" });
     }
 });
 
@@ -176,6 +204,7 @@ app.post('/api/auth/login', async (req, res) => {
             }
         });
     } catch (err) {
+        console.error('Login error:', err);
         res.status(500).json({ error: err.message });
     }
 });
@@ -296,13 +325,14 @@ app.post('/api/products/purchase', async (req, res) => {
         const orderDetails = `LOGIN: ${product.credentials}\nLINK: ${product.public_link}`;
         await getCollection('orders').insertOne({
             user_id: userId,
+            username: user.username,
             product_name: product.name,
             price: product.price,
             product_link: product.public_link,
             details: orderDetails,
             type: 'PRODUCT',
             status: 'COMPLETED',
-            createdAt: new Date()
+            created_at: new Date()
         });
         
         res.json({ message: "Success", details: orderDetails });
@@ -358,6 +388,13 @@ app.get('/api/sms/history/:userId', async (req, res) => {
 app.post('/api/sms/add-allowed', async (req, res) => {
     try {
         const { service_name, display_name } = req.body;
+        
+        // Check if exists
+        const existing = await getCollection('allowed_services').findOne({ service_name: service_name.toLowerCase() });
+        if (existing) {
+            return res.status(400).json({ error: "Service already exists" });
+        }
+        
         await getCollection('allowed_services').insertOne({
             service_name: service_name.toLowerCase(),
             display_name,
@@ -365,7 +402,7 @@ app.post('/api/sms/add-allowed', async (req, res) => {
         });
         res.json({ message: "Service added successfully!" });
     } catch (err) {
-        res.status(500).json({ error: "Service already exists" });
+        res.status(500).json({ error: err.message });
     }
 });
 
@@ -400,14 +437,63 @@ app.get('/api/auth/transactions/:userId', async (req, res) => {
     }
 });
 
+// Verify payment (Flutterwave webhook)
+app.post('/api/auth/verify-payment', async (req, res) => {
+    try {
+        const { transaction_id, userId } = req.body;
+        
+        // Verify with Flutterwave
+        const response = await axios.get(
+            `https://api.flutterwave.com/v3/transactions/${transaction_id}/verify`,
+            {
+                headers: {
+                    Authorization: `Bearer ${process.env.FLUTTERWAVE_SECRET_KEY}`
+                }
+            }
+        );
+        
+        const { data } = response.data;
+        
+        if (data.status === 'successful') {
+            const amount = data.amount;
+            
+            // Credit user
+            await getCollection('users').updateOne(
+                { _id: userId },
+                { $inc: { balance: amount } }
+            );
+            
+            // Log transaction
+            await getCollection('transactions').insertOne({
+                user_id: userId,
+                transaction_id,
+                amount,
+                status: 'successful',
+                created_at: new Date()
+            });
+            
+            res.json({ message: 'Payment verified', amount });
+        } else {
+            res.status(400).json({ error: 'Payment not successful' });
+        }
+    } catch (err) {
+        console.error('Payment verification error:', err);
+        res.status(500).json({ error: 'Verification failed' });
+    }
+});
+
 // ============================================
 // ANNOUNCEMENTS
 // ============================================
 
 app.get('/api/announcement', async (req, res) => {
     try {
-        const announcement = await getCollection('announcements').findOne({ is_active: true });
-        res.json(announcement || {});
+        const announcement = await getCollection('announcements')
+            .find({ is_active: true })
+            .sort({ createdAt: -1 })
+            .limit(1)
+            .toArray();
+        res.json(announcement[0] || {});
     } catch (err) {
         res.json({});
     }
@@ -416,14 +502,23 @@ app.get('/api/announcement', async (req, res) => {
 app.post('/api/admin/announcement', async (req, res) => {
     try {
         const { title, message, type } = req.body;
-        await getCollection('announcements').insertOne({
+        
+        // Deactivate old announcements
+        await getCollection('announcements').updateOne(
+            { is_active: true },
+            { $set: { is_active: false } }
+        );
+        
+        // Insert new announcement
+        const result = await getCollection('announcements').insertOne({
             title,
             message,
             type: type || 'info',
             is_active: true,
             createdAt: new Date()
         });
-        res.json({ message: "Announcement published!" });
+        
+        res.json({ message: "Announcement published!", id: result.insertedId });
     } catch (err) {
         res.status(500).json({ error: err.message });
     }
@@ -431,6 +526,10 @@ app.post('/api/admin/announcement', async (req, res) => {
 
 app.delete('/api/admin/announcement', async (req, res) => {
     try {
+        await getCollection('announcements').updateOne(
+            { is_active: true },
+            { $set: { is_active: false } }
+        );
         res.json({ message: "Announcement removed" });
     } catch (err) {
         res.status(500).json({ error: err.message });
@@ -471,6 +570,107 @@ app.get('/api/sms/live-config/:service', async (req, res) => {
     }
 });
 
+// SMS Order
+app.post('/api/sms/order', async (req, res) => {
+    try {
+        const { userId, service, country, operator } = req.body;
+        
+        // Get price first
+        const priceRes = await fetch(`https://5sim.net/v1/guest/prices?product=${service}`);
+        const priceData = await priceRes.json();
+        const price = Math.ceil(priceData[service][country][operator].cost * 1650 * 1.20);
+        
+        // Check user balance
+        const user = await getCollection('users').findOne({ _id: userId });
+        if (user.balance < price) {
+            return res.status(400).json({ error: 'Insufficient balance' });
+        }
+        
+        // Order from 5sim
+        const orderRes = await fetch(
+            `https://5sim.net/v1/user/buy/activation/${country}/${operator}/${service}`,
+            {
+                headers: {
+                    'Authorization': `Bearer ${process.env.FIVESIM_API_KEY}`,
+                    'Accept': 'application/json'
+                }
+            }
+        );
+        
+        const orderData = await orderRes.json();
+        
+        if (!orderRes.ok) {
+            return res.status(400).json({ error: orderData.message || 'Order failed' });
+        }
+        
+        // Deduct balance
+        await getCollection('users').updateOne(
+            { _id: userId },
+            { $inc: { balance: -price } }
+        );
+        
+        // Save order
+        const result = await getCollection('sms_orders').insertOne({
+            user_id: userId,
+            service,
+            country,
+            operator,
+            phone: orderData.phone,
+            price,
+            activation_id: orderData.id,
+            status: 'WAITING',
+            sms_code: null,
+            created_at: new Date()
+        });
+        
+        res.json({
+            orderId: result.insertedId,
+            phone: orderData.phone,
+            message: 'SMS number purchased successfully'
+        });
+    } catch (err) {
+        console.error('SMS order error:', err);
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// Check SMS code
+app.get('/api/sms/check/:orderId', async (req, res) => {
+    try {
+        const order = await getCollection('sms_orders').findOne({ _id: req.params.orderId });
+        if (!order) return res.status(404).json({ error: 'Order not found' });
+        
+        // Check with 5sim
+        const checkRes = await fetch(
+            `https://5sim.net/v1/user/check/${order.activation_id}`,
+            {
+                headers: {
+                    'Authorization': `Bearer ${process.env.FIVESIM_API_KEY}`,
+                    'Accept': 'application/json'
+                }
+            }
+        );
+        
+        const data = await checkRes.json();
+        
+        if (data.sms && data.sms[0]) {
+            const code = data.sms[0].code;
+            
+            // Update order
+            await getCollection('sms_orders').updateOne(
+                { _id: req.params.orderId },
+                { $set: { sms_code: code, status: 'COMPLETED' } }
+            );
+            
+            res.json({ code, status: 'COMPLETED' });
+        } else {
+            res.json({ code: null, status: order.status });
+        }
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
 // ============================================
 // SMM SERVICES
 // ============================================
@@ -499,7 +699,54 @@ app.get('/api/smm/live-services', async (req, res) => {
 app.post('/api/smm/order', async (req, res) => {
     try {
         const { userId, service, link, quantity } = req.body;
-        res.json({ orderId: Math.random(), message: "Order placed!" });
+        
+        // Get service price
+        const servicesRes = await axios.get('https://reallysimplesocial.com/api/v2', {
+            params: { key: process.env.SMM_API_KEY, action: 'services' }
+        });
+        
+        const serviceData = servicesRes.data.find(s => s.service == service);
+        if (!serviceData) return res.status(400).json({ error: 'Service not found' });
+        
+        const price = (parseFloat(serviceData.rate) * 1.20 * quantity) / 1000;
+        
+        // Check balance
+        const user = await getCollection('users').findOne({ _id: userId });
+        if (user.balance < price) {
+            return res.status(400).json({ error: 'Insufficient balance' });
+        }
+        
+        // Place order
+        const orderRes = await axios.post('https://reallysimplesocial.com/api/v2', null, {
+            params: {
+                key: process.env.SMM_API_KEY,
+                action: 'add',
+                service,
+                link,
+                quantity
+            }
+        });
+        
+        // Deduct balance
+        await getCollection('users').updateOne(
+            { _id: userId },
+            { $inc: { balance: -price } }
+        );
+        
+        // Save order
+        await getCollection('orders').insertOne({
+            user_id: userId,
+            username: user.username,
+            product_name: serviceData.name,
+            price,
+            product_link: link,
+            details: `Order ID: ${orderRes.data.order}`,
+            type: 'SMM',
+            status: 'PENDING',
+            created_at: new Date()
+        });
+        
+        res.json({ orderId: orderRes.data.order, message: 'Order placed successfully!' });
     } catch (err) {
         res.status(500).json({ error: err.message });
     }
