@@ -4,6 +4,7 @@ const dotenv = require('dotenv');
 const axios = require('axios');
 const bcryptjs = require('bcryptjs');
 const crypto = require('crypto');
+const { ObjectId } = require('mongodb');
 
 // Load env variables
 dotenv.config();
@@ -15,7 +16,7 @@ const app = express();
 // ============================================
 app.use(cors({
     origin: [
-        'https://mub-log.onrender.com',  // Your actual frontend URL
+        'https://mub-log.onrender.com',
         'http://localhost:3000',
         'http://localhost:5500',
         'http://127.0.0.1:5500'
@@ -25,19 +26,16 @@ app.use(cors({
     allowedHeaders: ['Content-Type', 'Authorization']
 }));
 
-// Handle preflight requests
 app.options('*', cors());
-
 app.use(express.json());
 
 // ============================================
-// SIMPLE MONGODB CONNECTION
+// MONGODB CONNECTION
 // ============================================
 let db = null;
 
 async function connectDB() {
     try {
-        // Using MongoDB Atlas URI directly
         const { MongoClient } = await import('mongodb');
         const uri = process.env.MONGODB_URI || 'mongodb://localhost:27017/mublog';
         const client = new MongoClient(uri);
@@ -50,7 +48,6 @@ async function connectDB() {
         console.error('❌ MongoDB Error:', err.message);
         console.log('ℹ️ Using in-memory storage as fallback');
         
-        // Fallback: in-memory storage
         return {
             collection: (name) => new InMemoryCollection(name)
         };
@@ -125,7 +122,6 @@ class InMemoryCollection {
     }
 }
 
-// Initialize DB on startup
 connectDB();
 
 // ============================================
@@ -134,6 +130,22 @@ connectDB();
 
 function getCollection(name) {
     return db ? db.collection(name) : new InMemoryCollection(name);
+}
+
+// Helper to convert string ID to ObjectId if needed
+function toObjectId(id) {
+    if (!id) return null;
+    
+    // If it's already an ObjectId, return it
+    if (id instanceof ObjectId) return id;
+    
+    // If it's a valid ObjectId string, convert it
+    if (ObjectId.isValid(id) && String(new ObjectId(id)) === id) {
+        return new ObjectId(id);
+    }
+    
+    // Otherwise return as-is (for numeric IDs in fallback mode)
+    return id;
 }
 
 const createToken = (data) => {
@@ -154,7 +166,6 @@ app.post('/api/auth/register', async (req, res) => {
     try {
         const { username, email, password } = req.body;
         
-        // Check if user exists
         const existing = await getCollection('users').findOne({ email });
         if (existing) {
             return res.status(400).json({ error: "Email already exists" });
@@ -219,32 +230,46 @@ app.get('/api/auth/users', async (req, res) => {
     }
 });
 
-// Get single user
+// Get single user - FIXED ID HANDLING
 app.get('/api/auth/user/:userId', async (req, res) => {
     try {
-        const user = await getCollection('users').findOne({ _id: req.params.userId });
+        const userId = toObjectId(req.params.userId);
+        const user = await getCollection('users').findOne({ _id: userId });
         if (!user) return res.status(404).json({ error: "User not found" });
         res.json(user);
     } catch (err) {
+        console.error('Get user error:', err);
         res.status(500).json({ error: err.message });
     }
 });
 
-// Topup
+// Topup - FIXED ID HANDLING
 app.post('/api/auth/topup', async (req, res) => {
     try {
         const { userId, amount } = req.body;
+        
+        console.log('💰 Topup request:', { userId, amount }); // Debug
+        
         if (isNaN(amount) || amount <= 0) {
             return res.status(400).json({ msg: "Invalid amount" });
         }
         
-        await getCollection('users').updateOne(
-            { _id: userId },
-            { $inc: { balance: amount } }
+        const userIdObj = toObjectId(userId);
+        
+        const result = await getCollection('users').updateOne(
+            { _id: userIdObj },
+            { $inc: { balance: parseFloat(amount) } }
         );
+        
+        console.log('✅ Topup result:', result); // Debug
+        
+        if (result.modifiedCount === 0) {
+            return res.status(404).json({ msg: "User not found" });
+        }
         
         res.json({ msg: `Successfully added ₦${amount}` });
     } catch (err) {
+        console.error('Topup error:', err);
         res.status(500).json({ error: err.message });
     }
 });
@@ -295,33 +320,34 @@ app.post('/api/products/add', async (req, res) => {
     }
 });
 
+// Purchase - FIXED ID HANDLING
 app.post('/api/products/purchase', async (req, res) => {
     try {
         const { userId, productId } = req.body;
         
-        const product = await getCollection('products').findOne({ _id: productId });
+        const userIdObj = toObjectId(userId);
+        const productIdObj = toObjectId(productId);
+        
+        const product = await getCollection('products').findOne({ _id: productIdObj });
         if (!product) return res.status(404).json({ error: "Product not found" });
         
-        const user = await getCollection('users').findOne({ _id: userId });
+        const user = await getCollection('users').findOne({ _id: userIdObj });
         if (!user) return res.status(404).json({ error: "User not found" });
         
         if (user.balance < product.price) {
             return res.status(400).json({ error: "Insufficient balance" });
         }
         
-        // Deduct balance
         await getCollection('users').updateOne(
-            { _id: userId },
+            { _id: userIdObj },
             { $inc: { balance: -product.price } }
         );
         
-        // Reduce stock
         await getCollection('products').updateOne(
-            { _id: productId },
+            { _id: productIdObj },
             { $inc: { stock: -1 } }
         );
         
-        // Create order
         const orderDetails = `LOGIN: ${product.credentials}\nLINK: ${product.public_link}`;
         await getCollection('orders').insertOne({
             user_id: userId,
@@ -337,13 +363,15 @@ app.post('/api/products/purchase', async (req, res) => {
         
         res.json({ message: "Success", details: orderDetails });
     } catch (err) {
+        console.error('Purchase error:', err);
         res.status(500).json({ error: err.message });
     }
 });
 
 app.delete('/api/products/delete/:id', async (req, res) => {
     try {
-        await getCollection('products').deleteOne({ _id: req.params.id });
+        const idObj = toObjectId(req.params.id);
+        await getCollection('products').deleteOne({ _id: idObj });
         res.json({ message: "Product deleted" });
     } catch (err) {
         res.status(500).json({ error: err.message });
@@ -351,12 +379,13 @@ app.delete('/api/products/delete/:id', async (req, res) => {
 });
 
 // ============================================
-// ORDERS
+// ORDERS - FIXED ID HANDLING
 // ============================================
 
 app.get('/api/orders/all/:userId', async (req, res) => {
     try {
-        const orders = await getCollection('orders').find({ user_id: req.params.userId }).toArray();
+        const userId = req.params.userId; // Keep as string for comparison
+        const orders = await getCollection('orders').find({ user_id: userId }).toArray();
         res.json(orders);
     } catch (err) {
         res.status(500).json({ error: err.message });
@@ -364,7 +393,7 @@ app.get('/api/orders/all/:userId', async (req, res) => {
 });
 
 // ============================================
-// SMS ROUTES
+// SMS ROUTES - FIXED ID HANDLING
 // ============================================
 
 app.get('/api/sms/available-services', async (req, res) => {
@@ -378,7 +407,8 @@ app.get('/api/sms/available-services', async (req, res) => {
 
 app.get('/api/sms/history/:userId', async (req, res) => {
     try {
-        const history = await getCollection('sms_orders').find({ user_id: req.params.userId }).toArray();
+        const userId = req.params.userId;
+        const history = await getCollection('sms_orders').find({ user_id: userId }).toArray();
         res.json(history);
     } catch (err) {
         res.status(500).json({ error: err.message });
@@ -389,7 +419,6 @@ app.post('/api/sms/add-allowed', async (req, res) => {
     try {
         const { service_name, display_name } = req.body;
         
-        // Check if exists
         const existing = await getCollection('allowed_services').findOne({ service_name: service_name.toLowerCase() });
         if (existing) {
             return res.status(400).json({ error: "Service already exists" });
@@ -408,7 +437,8 @@ app.post('/api/sms/add-allowed', async (req, res) => {
 
 app.delete('/api/sms/delete-allowed/:id', async (req, res) => {
     try {
-        await getCollection('allowed_services').deleteOne({ _id: req.params.id });
+        const idObj = toObjectId(req.params.id);
+        await getCollection('allowed_services').deleteOne({ _id: idObj });
         res.json({ message: "Service deleted" });
     } catch (err) {
         res.status(500).json({ error: err.message });
@@ -425,24 +455,24 @@ app.get('/api/sms/admin-all-prices', async (req, res) => {
 });
 
 // ============================================
-// TRANSACTIONS
+// TRANSACTIONS - FIXED ID HANDLING
 // ============================================
 
 app.get('/api/auth/transactions/:userId', async (req, res) => {
     try {
-        const transactions = await getCollection('transactions').find({ user_id: req.params.userId }).toArray();
+        const userId = req.params.userId;
+        const transactions = await getCollection('transactions').find({ user_id: userId }).toArray();
         res.json(transactions);
     } catch (err) {
         res.json([]);
     }
 });
 
-// Verify payment (Flutterwave webhook)
+// Verify payment - FIXED ID HANDLING
 app.post('/api/auth/verify-payment', async (req, res) => {
     try {
         const { transaction_id, userId } = req.body;
         
-        // Verify with Flutterwave
         const response = await axios.get(
             `https://api.flutterwave.com/v3/transactions/${transaction_id}/verify`,
             {
@@ -456,14 +486,13 @@ app.post('/api/auth/verify-payment', async (req, res) => {
         
         if (data.status === 'successful') {
             const amount = data.amount;
+            const userIdObj = toObjectId(userId);
             
-            // Credit user
             await getCollection('users').updateOne(
-                { _id: userId },
+                { _id: userIdObj },
                 { $inc: { balance: amount } }
             );
             
-            // Log transaction
             await getCollection('transactions').insertOne({
                 user_id: userId,
                 transaction_id,
@@ -503,13 +532,11 @@ app.post('/api/admin/announcement', async (req, res) => {
     try {
         const { title, message, type } = req.body;
         
-        // Deactivate old announcements
         await getCollection('announcements').updateOne(
             { is_active: true },
             { $set: { is_active: false } }
         );
         
-        // Insert new announcement
         const result = await getCollection('announcements').insertOne({
             title,
             message,
@@ -570,23 +597,21 @@ app.get('/api/sms/live-config/:service', async (req, res) => {
     }
 });
 
-// SMS Order
+// SMS Order - FIXED ID HANDLING
 app.post('/api/sms/order', async (req, res) => {
     try {
         const { userId, service, country, operator } = req.body;
         
-        // Get price first
         const priceRes = await fetch(`https://5sim.net/v1/guest/prices?product=${service}`);
         const priceData = await priceRes.json();
         const price = Math.ceil(priceData[service][country][operator].cost * 1650 * 1.20);
         
-        // Check user balance
-        const user = await getCollection('users').findOne({ _id: userId });
+        const userIdObj = toObjectId(userId);
+        const user = await getCollection('users').findOne({ _id: userIdObj });
         if (user.balance < price) {
             return res.status(400).json({ error: 'Insufficient balance' });
         }
         
-        // Order from 5sim
         const orderRes = await fetch(
             `https://5sim.net/v1/user/buy/activation/${country}/${operator}/${service}`,
             {
@@ -603,13 +628,11 @@ app.post('/api/sms/order', async (req, res) => {
             return res.status(400).json({ error: orderData.message || 'Order failed' });
         }
         
-        // Deduct balance
         await getCollection('users').updateOne(
-            { _id: userId },
+            { _id: userIdObj },
             { $inc: { balance: -price } }
         );
         
-        // Save order
         const result = await getCollection('sms_orders').insertOne({
             user_id: userId,
             service,
@@ -634,13 +657,13 @@ app.post('/api/sms/order', async (req, res) => {
     }
 });
 
-// Check SMS code
+// Check SMS code - FIXED ID HANDLING
 app.get('/api/sms/check/:orderId', async (req, res) => {
     try {
-        const order = await getCollection('sms_orders').findOne({ _id: req.params.orderId });
+        const orderIdObj = toObjectId(req.params.orderId);
+        const order = await getCollection('sms_orders').findOne({ _id: orderIdObj });
         if (!order) return res.status(404).json({ error: 'Order not found' });
         
-        // Check with 5sim
         const checkRes = await fetch(
             `https://5sim.net/v1/user/check/${order.activation_id}`,
             {
@@ -656,9 +679,8 @@ app.get('/api/sms/check/:orderId', async (req, res) => {
         if (data.sms && data.sms[0]) {
             const code = data.sms[0].code;
             
-            // Update order
             await getCollection('sms_orders').updateOne(
-                { _id: req.params.orderId },
+                { _id: orderIdObj },
                 { $set: { sms_code: code, status: 'COMPLETED' } }
             );
             
@@ -672,7 +694,7 @@ app.get('/api/sms/check/:orderId', async (req, res) => {
 });
 
 // ============================================
-// SMM SERVICES
+// SMM SERVICES - FIXED ID HANDLING
 // ============================================
 
 app.get('/api/smm/live-services', async (req, res) => {
@@ -700,7 +722,6 @@ app.post('/api/smm/order', async (req, res) => {
     try {
         const { userId, service, link, quantity } = req.body;
         
-        // Get service price
         const servicesRes = await axios.get('https://reallysimplesocial.com/api/v2', {
             params: { key: process.env.SMM_API_KEY, action: 'services' }
         });
@@ -710,13 +731,12 @@ app.post('/api/smm/order', async (req, res) => {
         
         const price = (parseFloat(serviceData.rate) * 1.20 * quantity) / 1000;
         
-        // Check balance
-        const user = await getCollection('users').findOne({ _id: userId });
+        const userIdObj = toObjectId(userId);
+        const user = await getCollection('users').findOne({ _id: userIdObj });
         if (user.balance < price) {
             return res.status(400).json({ error: 'Insufficient balance' });
         }
         
-        // Place order
         const orderRes = await axios.post('https://reallysimplesocial.com/api/v2', null, {
             params: {
                 key: process.env.SMM_API_KEY,
@@ -727,13 +747,11 @@ app.post('/api/smm/order', async (req, res) => {
             }
         });
         
-        // Deduct balance
         await getCollection('users').updateOne(
-            { _id: userId },
+            { _id: userIdObj },
             { $inc: { balance: -price } }
         );
         
-        // Save order
         await getCollection('orders').insertOne({
             user_id: userId,
             username: user.username,
@@ -771,7 +789,6 @@ app.listen(PORT, () => {
     console.log(`✅ Production ready!`);
 });
 
-// Graceful shutdown
 process.on('SIGINT', () => {
     console.log('\n👋 Server shutting down...');
     process.exit(0);
