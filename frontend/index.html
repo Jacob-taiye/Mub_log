@@ -414,9 +414,15 @@ header {
         </div>
 
         <header>
-            <div class="wallet-display">₦<span id="navBalance">0.00</span></div>
-            <div style="margin-left: 20px; font-weight: 600;" id="navUsername">User</div>
-        </header>
+    <div style="font-weight: 600;" id="navUsername">User</div>
+    <div style="display: flex; align-items: center; gap: 10px;">
+        <div class="wallet-display">₦<span id="navBalance">0.00</span></div>
+        <button class="mobile-logout" onclick="logout()">
+            <i class="fas fa-power-off"></i>
+            <span>Logout</span>
+        </button>
+    </div>
+</header>
 
         <div class="scroll-content">
             <!-- DASHBOARD HOME PAGE -->
@@ -1341,6 +1347,7 @@ async function loadSmsHistory() {
     </script>
 </body>
 </html>
+
 
 
 
