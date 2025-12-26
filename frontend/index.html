@@ -594,30 +594,36 @@
         if(id === 'smsHistoryPage') loadSmsHistory();
     }
 
-    async function openCategory(category, el) {
-        showSection('marketplace', el);
-        document.getElementById('currentCategoryTitle').innerText = category;
-        const grid = document.getElementById('productGrid');
-        grid.innerHTML = '<p style="color: #6b7280; text-align: center;">Loading items...</p>';
+   // REPLACE THE openCategory FUNCTION in index.html with this:
 
-        try {
-            const res = await fetch(`${API_BASE}/products/category/${category}`);
-            const products = await res.json();
-            
-            if (!products || products.length === 0) {
-                grid.innerHTML = `
-                    <div style="grid-column: 1/-1; text-align: center; padding: 60px 20px;">
-                        <i class="fas fa-inbox" style="font-size: 60px; color: #e5e7eb; margin-bottom: 15px;"></i>
-                        <h3 style="color: #6b7280; font-weight: 600;">No accounts available</h3>
-                        <p style="color: #9ca3af; margin: 10px 0 0 0;">Check back later for new items in ${category}</p>
-                    </div>
-                `;
-                return;
-            }
+async function openCategory(category, el) {
+    showSection('marketplace', el);
+    document.getElementById('currentCategoryTitle').innerText = category;
+    const grid = document.getElementById('productGrid');
+    grid.innerHTML = '<p style="color: #6b7280; text-align: center;">Loading items...</p>';
 
-            // Special handling for "Pictures" category - show images
-            if (category.toLowerCase().includes('picture')) {
-                grid.innerHTML = products.map(p => `
+    try {
+        const res = await fetch(`${API_BASE}/products/category/${category}`);
+        const products = await res.json();
+        
+        console.log('📦 Products loaded:', products);
+        
+        if (!products || products.length === 0) {
+            grid.innerHTML = `
+                <div style="grid-column: 1/-1; text-align: center; padding: 60px 20px;">
+                    <i class="fas fa-inbox" style="font-size: 60px; color: #e5e7eb; margin-bottom: 15px;"></i>
+                    <h3 style="color: #6b7280; font-weight: 600;">No accounts available</h3>
+                    <p style="color: #9ca3af; margin: 10px 0 0 0;">Check back later for new items in ${category}</p>
+                </div>
+            `;
+            return;
+        }
+
+        // Special handling for "Pictures" category - show images
+        if (category.toLowerCase().includes('picture')) {
+            grid.innerHTML = products.map(p => {
+                const productId = p._id || p.id;
+                return `
                     <div class="card" style="overflow: hidden;">
                         <span class="history-badge badge-product">${p.category}</span>
                         ${p.public_link ? `
@@ -632,33 +638,38 @@
                         <h3 style="margin:5px 0; font-size: 16px;">${p.name}</h3>
                         <p style="color: #6b7280; font-size: 13px; margin: 10px 0; line-height: 1.4;">${p.description || 'Premium working picture'}</p>
                         <div class="price">₦${parseFloat(p.price).toLocaleString()}</div>
-                        <button class="buy-btn" onclick="buyProduct(${p.id})">Buy Now</button>
+                        <button class="buy-btn" onclick="buyProduct('${productId}')">Buy Now</button>
                     </div>
-                `).join('');
-            } else {
-                // Regular products display
-                grid.innerHTML = products.map(p => `
+                `;
+            }).join('');
+        } else {
+            // Regular products display
+            grid.innerHTML = products.map(p => {
+                const productId = p._id || p.id;
+                return `
                     <div class="card">
                         <span class="history-badge badge-product">${p.category}</span>
                         <h3 style="margin:5px 0;">${p.name}</h3>
                         <p style="color: #6b7280; font-size: 13px; margin: 10px 0; line-height: 1.4;">${p.description || 'Premium account'}</p>
                         ${p.public_link && !category.toLowerCase().includes('picture') ? `<p style="margin: 8px 0;"><a href="${p.public_link}" target="_blank" style="color: var(--primary); text-decoration: none; font-size: 12px; font-weight: 600;">📸 View Profile</a></p>` : ''}
                         <div class="price">₦${parseFloat(p.price).toLocaleString()}</div>
-                        <button class="buy-btn" onclick="buyProduct(${p.id})">Buy Now</button>
+                        <button class="buy-btn" onclick="buyProduct('${productId}')">Buy Now</button>
                     </div>
-                `).join('');
-            }
-        } catch (e) { 
-            grid.innerHTML = `
-                <div style="grid-column: 1/-1; text-align: center; padding: 60px 20px;">
-                    <i class="fas fa-exclamation-circle" style="font-size: 60px; color: #ef4444; opacity: 0.5; margin-bottom: 15px;"></i>
-                    <h3 style="color: #6b7280; font-weight: 600;">Connection Error</h3>
-                    <p style="color: #9ca3af; margin: 10px 0 20px 0;">Failed to load products</p>
-                    <button onclick="openCategory('${category}')" style="background: var(--primary); color: white; border: none; padding: 10px 20px; border-radius: 8px; cursor: pointer; font-weight: 600;">Try Again</button>
-                </div>
-            `;
+                `;
+            }).join('');
         }
+    } catch (e) { 
+        console.error('Error loading category:', e);
+        grid.innerHTML = `
+            <div style="grid-column: 1/-1; text-align: center; padding: 60px 20px;">
+                <i class="fas fa-exclamation-circle" style="font-size: 60px; color: #ef4444; opacity: 0.5; margin-bottom: 15px;"></i>
+                <h3 style="color: #6b7280; font-weight: 600;">Connection Error</h3>
+                <p style="color: #9ca3af; margin: 10px 0 20px 0;">Failed to load products</p>
+                <button onclick="openCategory('${category}')" style="background: var(--primary); color: white; border: none; padding: 10px 20px; border-radius: 8px; cursor: pointer; font-weight: 600;">Try Again</button>
+            </div>
+        `;
     }
+}
 
     async function buyProduct(productId) {
         if(!confirm("Are you sure you want to buy this item?")) return;
@@ -1247,4 +1258,5 @@ async function loadSmsHistory() {
 </body>
 
 </html>
+
 
