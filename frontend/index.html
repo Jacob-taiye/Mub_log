@@ -449,17 +449,47 @@ header {
 
 /* RESPONSIVE */
 @media (max-width: 768px) {
+    body {
+        height: auto;
+        min-height: 100vh;
+        flex-direction: column;
+    }
+
     .sidebar {
         position: fixed;
         left: 0;
         top: 0;
         transform: translateX(-100%);
-        width: 100%;
-        max-width: 80vw;
+        width: 260px;
+        height: 100vh;
+        overflow-y: auto;
     }
 
     .sidebar.open {
         transform: translateX(0);
+    }
+
+    .sidebar-nav {
+        padding-bottom: 100px;
+    }
+
+    .sidebar-footer {
+        position: fixed;
+        bottom: 0;
+        left: -260px;
+        width: 260px;
+        padding: 15px;
+        border-top: 1px solid #1f2937;
+        background: #0b0f1a;
+        transition: left 0.3s ease;
+    }
+
+    .sidebar.open .sidebar-footer {
+        left: 0;
+    }
+
+    .btn-logout {
+        width: 100%;
     }
 
     .mobile-header {
@@ -475,8 +505,13 @@ header {
         justify-content: space-between;
     }
 
+    .main-content {
+        min-height: 100vh;
+    }
+
     .scroll-content {
         padding: 20px;
+        min-height: calc(100vh - 80px);
     }
 
     #navUsername {
@@ -497,6 +532,10 @@ header {
         max-width: 100%;
         width: 95%;
         padding: 30px 20px;
+    }
+
+    .scroll-content {
+        padding-bottom: 50px;
     }
 }
     </style>
@@ -1479,4 +1518,5 @@ async function loadSmsHistory() {
     </script>
 </body>
 </html>
+
 
