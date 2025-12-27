@@ -441,10 +441,72 @@ async function processPurchase(userId, user, product, res) {
 
 app.delete('/api/products/delete/:id', async (req, res) => {
     try {
-        const idObj = toObjectId(req.params.id);
-        await getCollection('products').deleteOne({ _id: idObj });
-        res.json({ message: "Product deleted" });
+        const id = req.params.id;
+        let result;
+        
+        // Try with ObjectId first
+        if (ObjectId.isValid(id)) {
+            const idObj = new ObjectId(id);
+            result = await getCollection('products').deleteOne({ _id: idObj });
+        }
+        
+        // If not found, try with string id
+        if (!result || result.deletedCount === 0) {
+            result = await getCollection('products').deleteOne({ _id: id });
+        }
+        
+        if (result.deletedCount === 0) {
+            return res.status(404).json({ error: "Product not found" });
+        }
+        
+        res.json({ message: "Product deleted successfully" });
     } catch (err) {
+        console.error('Delete error:', err);
+        res.status(500).json({ error: err.message });
+    }
+});
+
+app.put('/api/products/update/:id', async (req, res) => {
+    try {
+        const id = req.params.id;
+        const { name, price, category, description, public_link, credentials } = req.body;
+        
+        const updateData = {
+            name,
+            price: parseFloat(price),
+            category,
+            description,
+            public_link,
+            credentials,
+            updatedAt: new Date()
+        };
+        
+        let result;
+        
+        // Try with ObjectId first
+        if (ObjectId.isValid(id)) {
+            const idObj = new ObjectId(id);
+            result = await getCollection('products').updateOne(
+                { _id: idObj },
+                { $set: updateData }
+            );
+        }
+        
+        // If not found, try with string id
+        if (!result || result.modifiedCount === 0) {
+            result = await getCollection('products').updateOne(
+                { _id: id },
+                { $set: updateData }
+            );
+        }
+        
+        if (result.modifiedCount === 0) {
+            return res.status(404).json({ error: "Product not found" });
+        }
+        
+        res.json({ message: "Product updated successfully" });
+    } catch (err) {
+        console.error('Update error:', err);
         res.status(500).json({ error: err.message });
     }
 });
