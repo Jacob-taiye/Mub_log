@@ -412,6 +412,57 @@
                 </div>
             </section>
 
+            <div id="editModal" style="display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.7); z-index: 10000; padding: 20px; overflow-y: auto;">
+    <div style="background: white; max-width: 600px; margin: 50px auto; border-radius: 12px; padding: 30px; position: relative;">
+        <button onclick="closeEditModal()" style="position: absolute; top: 15px; right: 15px; background: #f3f4f6; border: none; width: 35px; height: 35px; border-radius: 50%; cursor: pointer; font-size: 18px;">×</button>
+        
+        <h2 style="margin-top: 0;">Edit Product</h2>
+        
+        <form id="editForm">
+            <input type="hidden" id="editProductId">
+            
+            <div class="grid-form">
+                <div>
+                    <label>Category</label>
+                    <select id="editProdCategory" required>
+                        <option value="Facebook">Facebook</option>
+                        <option value="Instagram">Instagram</option>
+                        <option value="TikTok">TikTok</option>
+                        <option value="Twitter">Twitter</option>
+                        <option value="Netflix">Netflix</option>
+                        <option value="VPN">VPN</option>
+                        <option value="Pictures">Working Pictures</option>
+                    </select>
+                </div>
+                <div>
+                    <label>Display Name</label>
+                    <input type="text" id="editProdName" required>
+                </div>
+                <div>
+                    <label>Price (₦)</label>
+                    <input type="number" id="editProdPrice" required>
+                </div>
+                <div>
+                    <label>Public Link / Image URL</label>
+                    <input type="text" id="editProdPublicLink">
+                </div>
+                <div class="full-width">
+                    <label>Public Description</label>
+                    <textarea id="editProdDetails" style="height: 60px;"></textarea>
+                </div>
+                <div class="full-width">
+                    <label>Private Credentials</label>
+                    <textarea id="editProdCredentials" style="height: 80px;" required></textarea>
+                </div>
+            </div>
+            
+            <button type="submit" class="btn-add" style="margin-top: 20px;">
+                <i class="fas fa-save"></i> Save Changes
+            </button>
+        </form>
+    </div>
+</div>
+
             <!-- ANNOUNCEMENT SECTION -->
             <section id="announcementSection" class="admin-section">
                 <div class="admin-card">
@@ -750,36 +801,128 @@ async function loadAllSales() {
 
     // --- INVENTORY MANAGEMENT ---
     async function loadInventory() {
-        try {
-            const res = await fetch(`${API_BASE}/products/all`, { headers: getHeaders() });
-            const products = await res.json();
-            const body = document.getElementById('manageTableBody');
-            body.innerHTML = products.map(p => `
+    try {
+        const res = await fetch(`${API_BASE}/products/all`, { headers: getHeaders() });
+        const products = await res.json();
+        const body = document.getElementById('manageTableBody');
+        
+        if (!products || products.length === 0) {
+            body.innerHTML = '<tr><td colspan="5" style="text-align:center; padding:20px;">No products found</td></tr>';
+            return;
+        }
+        
+        body.innerHTML = products.map(p => {
+            const productId = p._id || p.id;
+            return `
                 <tr>
                     <td><strong>${p.name}</strong></td>
                     <td>${p.category}</td>
                     <td>₦${parseFloat(p.price).toLocaleString()}</td>
                     <td><span class="stock-badge">Stock: ${p.stock || 0}</span></td>
                     <td>
-                        <button onclick="deleteProduct(${p.id})" class="btn-delete">
+                        <button onclick="editProduct('${productId}')" class="btn-action" style="margin-right: 5px;">
+                            <i class="fas fa-edit"></i> Edit
+                        </button>
+                        <button onclick="deleteProduct('${productId}')" class="btn-delete">
                             <i class="fas fa-trash"></i>
                         </button>
                     </td>
                 </tr>
-            `).join('');
-        } catch (e) { }
+            `;
+        }).join('');
+    } catch (e) {
+        console.error('Load inventory error:', e);
     }
+}
 
-    async function deleteProduct(id) {
-        if(!confirm("Delete this product?")) return;
-        try {
-            const res = await fetch(`${API_BASE}/products/delete/${id}`, { 
-                method: 'DELETE',
-                headers: getHeaders()
-            });
-            if(res.ok) loadInventory();
-        } catch (err) { alert("Delete failed"); }
+   async function deleteProduct(id) {
+    if (!confirm("Are you sure you want to delete this product?")) return;
+    
+    try {
+        const res = await fetch(`${API_BASE}/products/delete/${id}`, {
+            method: 'DELETE',
+            headers: getHeaders()
+        });
+        
+        const data = await res.json();
+        
+        if (res.ok) {
+            alert("✅ Product deleted successfully");
+            loadInventory();
+            loadDashboardStats();
+        } else {
+            alert("❌ " + (data.error || "Failed to delete product"));
+        }
+    } catch (err) {
+        console.error('Delete error:', err);
+        alert("❌ Server error: " + err.message);
     }
+}
+
+    async function editProduct(id) {
+    try {
+        const res = await fetch(`${API_BASE}/products/all`, { headers: getHeaders() });
+        const products = await res.json();
+        const product = products.find(p => (p._id || p.id) == id);
+        
+        if (!product) {
+            alert("Product not found");
+            return;
+        }
+        
+        document.getElementById('editProductId').value = id;
+        document.getElementById('editProdCategory').value = product.category;
+        document.getElementById('editProdName').value = product.name;
+        document.getElementById('editProdPrice').value = product.price;
+        document.getElementById('editProdPublicLink').value = product.public_link || '';
+        document.getElementById('editProdDetails').value = product.description || '';
+        document.getElementById('editProdCredentials').value = product.credentials;
+        
+        document.getElementById('editModal').style.display = 'block';
+    } catch (err) {
+        console.error('Edit load error:', err);
+        alert("Failed to load product");
+    }
+}
+
+function closeEditModal() {
+    document.getElementById('editModal').style.display = 'none';
+}
+
+    document.getElementById('editForm').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    
+    const id = document.getElementById('editProductId').value;
+    const data = {
+        category: document.getElementById('editProdCategory').value,
+        name: document.getElementById('editProdName').value,
+        price: parseFloat(document.getElementById('editProdPrice').value),
+        public_link: document.getElementById('editProdPublicLink').value,
+        description: document.getElementById('editProdDetails').value,
+        credentials: document.getElementById('editProdCredentials').value
+    };
+    
+    try {
+        const res = await fetch(`${API_BASE}/products/update/${id}`, {
+            method: 'PUT',
+            headers: getHeaders(),
+            body: JSON.stringify(data)
+        });
+        
+        const result = await res.json();
+        
+        if (res.ok) {
+            alert("✅ Product updated successfully!");
+            closeEditModal();
+            loadInventory();
+        } else {
+            alert("❌ " + (result.error || "Failed to update product"));
+        }
+    } catch (err) {
+        console.error('Update error:', err);
+        alert("❌ Server error: " + err.message);
+    }
+});
 
     async function loadAllSales() {
         try {
@@ -891,6 +1034,7 @@ async function loadAllSales() {
 </body>
 
 </html>
+
 
 
 
