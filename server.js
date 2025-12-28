@@ -593,7 +593,7 @@ app.get('/api/sms/admin-all-prices', async (req, res) => {
 
 app.get('/api/sms/live-config/:service', async (req, res) => {
     const service = req.params.service;
-    const EXCHANGE_RATE = 20; // 1 USD = 5 NGN
+    const EXCHANGE_RATE = 30; // 1 USD = 5 NGN
     const MARKUP_PERCENTAGE = 20; // 20% profit margin
     
     try {
