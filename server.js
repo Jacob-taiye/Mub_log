@@ -452,22 +452,32 @@ async function processPurchase(userId, user, product, res) {
             });
         }
         
-        if (product.stock < 1) {
+        // Check if product is permanent (Tools or Format) or has stock
+        const isPermanent = ['Tools', 'Format'].includes(product.category);
+        
+        if (!isPermanent && product.stock < 1) {
             return res.status(400).json({ error: "Product out of stock" });
         }
         
+        // Deduct balance
         await getCollection('users').updateOne(
             { _id: userId },
             { $inc: { balance: -product.price } }
         );
         console.log('✅ Balance deducted');
         
-        await getCollection('products').updateOne(
-            { _id: product._id },
-            { $inc: { stock: -1 } }
-        );
-        console.log('✅ Stock reduced');
+        // Only reduce stock if NOT a permanent service
+        if (!isPermanent) {
+            await getCollection('products').updateOne(
+                { _id: product._id },
+                { $inc: { stock: -1 } }
+            );
+            console.log('✅ Stock reduced');
+        } else {
+            console.log('🔄 Permanent service - stock not reduced');
+        }
         
+        // Create order record
         const orderDetails = `LOGIN: ${product.credentials}\nLINK: ${product.public_link}`;
         await getCollection('orders').insertOne({
             user_id: String(userId),
