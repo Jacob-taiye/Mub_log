@@ -549,18 +549,81 @@ header {
             </section>
 
             <section id="topup" class="content-section">
-                <div class="topup-box">
-                    <div style="font-size: 50px; margin-bottom: 10px;">💳</div>
-                    <h2>Fund Wallet</h2>
-                    <input type="number" id="topupAmount" placeholder="Enter amount in Naira">
-                    <button class="buy-btn" id="paymentBtn" onclick="payWithFlutterwave()">
-                        <i class="fas fa-credit-card"></i> Continue to Payment
-                    </button>
-                    <p style="margin-top: 15px; color: #9ca3af; font-size: 13px;">
-                        <i class="fas fa-lock"></i> Secure payment powered by Flutterwave
+    <div class="topup-box" style="max-width: 600px;">
+        <div style="font-size: 50px; margin-bottom: 10px;">💳</div>
+        <h2>Fund Wallet</h2>
+        
+        <!-- Amount Input -->
+        <input type="number" id="topupAmount" placeholder="Enter amount in Naira" style="margin-bottom: 20px;">
+        
+        <!-- Payment Method Dropdown -->
+        <div class="input-group" style="text-align: left; margin-bottom: 25px;">
+            <label>Select Payment Method</label>
+            <select id="paymentMethodSelect" onchange="handlePaymentMethodChange()" style="width: 100%; padding: 12px; border: 2px solid #e5e7eb; border-radius: 8px; font-size: 14px; font-weight: 600;">
+                <option value="flutterwave">💳 Card Payment (Instant)</option>
+                <option value="manual">🏦 Manual Bank Transfer</option>
+            </select>
+        </div>
+        
+        <!-- Flutterwave Payment Section -->
+        <div id="flutterwaveSection">
+            <button class="buy-btn" id="paymentBtn" onclick="payWithFlutterwave()">
+                <i class="fas fa-credit-card"></i> Continue to Payment
+            </button>
+            <p style="margin-top: 15px; color: #9ca3af; font-size: 13px;">
+                <i class="fas fa-lock"></i> Secure payment powered by Flutterwave
+            </p>
+        </div>
+        
+        <!-- Manual Transfer Section -->
+        <div id="manualSection" style="display: none;">
+            <div style="background: #f9fafb; border: 2px solid #e5e7eb; border-radius: 12px; padding: 25px; text-align: left; margin-bottom: 20px;">
+                <h3 style="margin: 0 0 20px 0; color: #111827; font-size: 18px; text-align: center;">
+                    <i class="fas fa-university" style="color: var(--primary);"></i> Bank Details
+                </h3>
+                
+                <div style="background: white; padding: 15px; border-radius: 8px; margin-bottom: 12px; border: 1px solid #e5e7eb;">
+                    <div style="color: #6b7280; font-size: 12px; margin-bottom: 5px;">Bank Name</div>
+                    <div style="font-weight: 700; font-size: 16px; color: #111827;">KUDA</div>
+                </div>
+                
+                <div style="background: white; padding: 15px; border-radius: 8px; margin-bottom: 12px; border: 1px solid #e5e7eb;">
+                    <div style="color: #6b7280; font-size: 12px; margin-bottom: 5px;">Account Number</div>
+                    <div style="font-weight: 700; font-size: 16px; color: #111827; display: flex; align-items: center; justify-content: space-between;">
+                        <span id="accountNumber">2081546815</span>
+                        <button onclick="copyAccountNumber()" style="background: #eef2ff; color: var(--primary); border: none; padding: 6px 12px; border-radius: 6px; cursor: pointer; font-size: 12px; font-weight: 700;">
+                            <i class="fas fa-copy"></i> Copy
+                        </button>
+                    </div>
+                </div>
+                
+                <div style="background: white; padding: 15px; border-radius: 8px; margin-bottom: 12px; border: 1px solid #e5e7eb;">
+                    <div style="color: #6b7280; font-size: 12px; margin-bottom: 5px;">Account Name</div>
+                    <div style="font-weight: 700; font-size: 16px; color: #111827;">Bolaji Lateefat</div>
+                </div>
+                
+                <div style="background: white; padding: 15px; border-radius: 8px; border: 1px solid #e5e7eb;">
+                    <div style="color: #6b7280; font-size: 12px; margin-bottom: 5px;">Amount to Send</div>
+                    <div style="font-weight: 700; font-size: 20px; color: #10b981;">₦<span id="transferAmount">0</span></div>
+                </div>
+                
+                <div style="background: #fef3c7; padding: 12px; border-radius: 8px; margin-top: 15px; border-left: 4px solid #f59e0b;">
+                    <p style="margin: 0; font-size: 13px; color: #92400e; line-height: 1.5;">
+                        <i class="fas fa-info-circle"></i> <strong>Important:</strong> After transfer, click "I have made transfer" to notify us via WhatsApp with proof.
                     </p>
                 </div>
-            </section>
+            </div>
+            
+            <button class="buy-btn" style="background: #25d366;" onclick="confirmManualTransfer()">
+                <i class="fab fa-whatsapp"></i> I have made transfer
+            </button>
+            
+            <p style="margin-top: 15px; color: #9ca3af; font-size: 13px;">
+                <i class="fas fa-clock"></i> Manual transfers are verified within 5-30 minutes
+            </p>
+        </div>
+    </div>
+</section>
 
             <section id="transHistoryPage" class="content-section">
                 <h2 style="font-size: 28px;">Top-up History</h2>
@@ -1524,9 +1587,91 @@ async function loadSmsHistory() {
         document.getElementById('whatsappBtn').onclick = () => window.open(whatsappURL, '_blank');
     }
 
+        // Handle payment method change
+function handlePaymentMethodChange() {
+    const method = document.getElementById('paymentMethodSelect').value;
+    const amount = document.getElementById('topupAmount').value;
+    
+    if (method === 'flutterwave') {
+        document.getElementById('flutterwaveSection').style.display = 'block';
+        document.getElementById('manualSection').style.display = 'none';
+    } else if (method === 'manual') {
+        document.getElementById('flutterwaveSection').style.display = 'none';
+        document.getElementById('manualSection').style.display = 'block';
+        
+        // Update amount in bank details
+        if (amount && amount > 0) {
+            document.getElementById('transferAmount').innerText = parseFloat(amount).toLocaleString();
+        }
+    }
+}
+
+function copyAccountNumber() {
+    const accountNumber = document.getElementById('accountNumber').innerText;
+    
+    navigator.clipboard.writeText(accountNumber).then(() => {
+        const btn = event.target.closest('button');
+        const originalHTML = btn.innerHTML;
+        btn.innerHTML = '<i class="fas fa-check"></i> Copied!';
+        btn.style.background = '#d1fae5';
+        btn.style.color = '#059669';
+        
+        setTimeout(() => {
+            btn.innerHTML = originalHTML;
+            btn.style.background = '#eef2ff';
+            btn.style.color = 'var(--primary)';
+        }, 2000);
+    }).catch(() => {
+        alert('Account Number: ' + accountNumber);
+    });
+}
+
+function confirmManualTransfer() {
+    const amount = document.getElementById('topupAmount').value;
+    
+    if (!amount || amount <= 0) {
+        alert("Please enter a valid amount first");
+        return;
+    }
+    
+    if (amount < 100) {
+        alert("Minimum top-up amount is ₦100");
+        return;
+    }
+    
+    const username = localStorage.getItem('username') || 'User';
+    const userId = localStorage.getItem('userId') || 'Unknown';
+    
+    const whatsappNumber = '2348087074910';
+    const message = `Hello, I have made a manual transfer for wallet top-up.
+
+*User Details:*
+- Username: ${username}
+- User ID: ${userId}
+- Amount: ₦${parseFloat(amount).toLocaleString()}
+
+*Bank Details Used:*
+- Bank: KUDA
+- Account: 2081546815
+- Account Name: Bolaji Lateefat
+
+Please verify and credit my account. I will send proof of payment now.`;
+    
+    const whatsappURL = `https://wa.me/${whatsappNumber}?text=${encodeURIComponent(message)}`;
+    window.open(whatsappURL, '_blank');
+    
+    setTimeout(() => {
+        alert('✅ WhatsApp opened! Please send your payment proof.\n\nYour wallet will be credited within 5-30 minutes after verification.');
+        document.getElementById('topupAmount').value = '';
+        document.getElementById('paymentMethodSelect').value = 'flutterwave';
+        handlePaymentMethodChange();
+    }, 1000);
+}
+
     </script>
 </body>
 </html>
+
 
 
 
