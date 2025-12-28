@@ -622,80 +622,77 @@ app.post('/api/sms/order', async (req, res) => {
             });
         }
         
-        // Create SMS order on 5sim
+        // Verify API key exists
+        if (!process.env.FIVESIM_API_KEY) {
+            console.error('❌ FIVESIM_API_KEY not configured in .env');
+            return res.status(500).json({ error: 'SMS service not configured. Contact admin.' });
+        }
+        
+        // Create SMS order with API key
         const orderUrl = `https://5sim.net/v1/user/buy/activation/${country}/${operator}/${service}`;
         console.log('📞 Order URL:', orderUrl);
-        console.log('🔑 Using API Key:', process.env.FIVESIM_API_KEY.substring(0, 10) + '...');
+        console.log('🔑 API Key set:', !!process.env.FIVESIM_API_KEY);
         
-        const orderRes = await fetch(orderUrl, {
-            method: 'GET',
-            headers: {
-                'Authorization': `Bearer ${process.env.FIVESIM_API_KEY}`,
-                'Accept': 'application/json',
-                'Content-Type': 'application/json'
-            }
-        });
+        let orderData;
         
-        console.log('📡 Response status:', orderRes.status);
-        
-        const orderText = await orderRes.text();
-        console.log('📦 Raw response (first 500 chars):', orderText.substring(0, 500));
-        
-        if (!orderText || orderText.trim() === '') {
-            console.error('❌ Empty response from 5sim');
-            console.error('Status:', orderRes.status);
-            console.error('Headers:', Object.fromEntries(orderRes.headers.entries()));
-            
-            // Try guest API as fallback
-            console.log('🔄 Trying guest activation API...');
-            const guestUrl = `https://5sim.net/v1/guest/buy/activation/${country}/${operator}/${service}`;
-            
-            const guestRes = await fetch(guestUrl, {
+        try {
+            const orderRes = await fetch(orderUrl, {
                 method: 'GET',
                 headers: {
+                    'Authorization': `Bearer ${process.env.FIVESIM_API_KEY}`,
                     'Accept': 'application/json'
                 }
             });
             
-            const guestText = await guestRes.text();
-            console.log('Guest response:', guestText.substring(0, 300));
+            console.log('📡 Response status:', orderRes.status);
+            console.log('📡 Response OK:', orderRes.ok);
             
-            if (!guestRes.ok || !guestText) {
-                return res.status(500).json({ error: 'No response from SMS provider. Check your internet connection.' });
+            const orderText = await orderRes.text();
+            console.log('📦 Raw response:', orderText.substring(0, 500));
+            
+            if (!orderText || orderText.trim() === '') {
+                console.error('❌ Empty response from 5sim');
+                return res.status(400).json({ error: 'Empty response from SMS provider. Check your API key.' });
             }
             
-            const guestData = JSON.parse(guestText);
-            if (guestData.phone && guestData.id) {
-                orderData = guestData;
-            } else {
-                return res.status(400).json({ error: guestData.message || 'Guest API failed' });
-            }
-        } else {
-            let orderData;
             try {
                 orderData = JSON.parse(orderText);
             } catch (parseErr) {
                 console.error('❌ JSON parse error:', parseErr);
-                console.error('Raw text:', orderText);
-                return res.status(500).json({ error: 'Invalid JSON response from SMS provider' });
+                console.error('Response text:', orderText);
+                return res.status(400).json({ error: 'Invalid JSON from SMS provider' });
             }
             
+            console.log('✅ Parsed response:', orderData);
+            
             if (!orderRes.ok) {
-                console.error('❌ 5sim API error:', orderData);
+                console.error('❌ API error response:', orderData);
                 
                 if (orderData.message === 'no free phones') {
-                    return res.status(400).json({ error: 'No phones available. Try a different operator.' });
+                    return res.status(400).json({ error: 'No phones available. Try another operator.' });
                 }
                 
-                return res.status(400).json({ 
-                    error: orderData.message || orderData.error || 'Failed to purchase SMS number' 
-                });
+                if (orderData.message) {
+                    return res.status(400).json({ error: orderData.message });
+                }
+                
+                if (orderData.error) {
+                    return res.status(400).json({ error: orderData.error });
+                }
+                
+                return res.status(400).json({ error: 'Failed to purchase SMS number' });
             }
             
             if (!orderData.phone || !orderData.id) {
-                console.error('❌ Missing phone or id:', orderData);
-                return res.status(400).json({ error: 'Failed to get phone number from provider' });
+                console.error('❌ Missing phone or id in response:', orderData);
+                return res.status(400).json({ error: 'No phone number received from provider' });
             }
+            
+            console.log('✅ Phone number received:', orderData.phone);
+            
+        } catch (fetchErr) {
+            console.error('❌ Network fetch error:', fetchErr);
+            return res.status(500).json({ error: `Network error: ${fetchErr.message}` });
         }
         
         // Deduct balance
