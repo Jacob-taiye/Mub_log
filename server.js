@@ -701,7 +701,7 @@ app.post('/api/sms/order', async (req, res) => {
             created_at: new Date()
         });
 
-        const result = await getCollection('sms_orders').insertOne({
+    const result = await getCollection('sms_orders').insertOne({
     user_id: userId,
     service,
     country,
