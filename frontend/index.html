@@ -995,6 +995,11 @@ async function purchaseSms() {
         document.getElementById('smsPhone').innerText = data.phone;
         document.getElementById('smsStatusText').innerText = 'Waiting for SMS...';
         document.getElementById('smsCodeBox').innerText = 'Waiting for verification code...';
+
+        document.getElementById('smsCancelBtn').onclick = () => cancelSmsOrder(data.orderId);
+
+// Start polling for SMS code
+pollSmsCode(data.orderId);
         
         // Start polling for SMS code
         pollSmsCode(data.orderId);
@@ -1013,10 +1018,71 @@ async function pollSmsCode(orderId) {
     console.log('🔄 Polling for SMS code:', orderId);
     
     let attempts = 0;
-    const maxAttempts = 60; // Poll for 5 minutes (every 5 seconds)
+    const maxAttempts = 300; // 25 minutes = 1500 seconds / 5 seconds per attempt
+    let timeoutMs = 25 * 60 * 1000; // 25 minutes
+    const startTime = Date.now();
+    
+    // Store polling info for cancellation
+    window.currentSmsPolling = {
+        orderId,
+        interval: null,
+        cancelled: false
+    };
+    
+    const displayCountdown = () => {
+        const elapsed = Date.now() - startTime;
+        const remaining = Math.max(0, timeoutMs - elapsed);
+        const minutes = Math.floor(remaining / 60000);
+        const seconds = Math.floor((remaining % 60000) / 1000);
+        
+        const statusText = document.getElementById('smsStatusText');
+        if (statusText) {
+            statusText.innerHTML = `
+                <span style="color: #f59e0b;">⏳ Waiting for SMS...</span><br>
+                <span style="font-size: 24px; font-weight: 800; color: #111827;">
+                    ${minutes}:${seconds.toString().padStart(2, '0')}
+                </span>
+                <br>
+                <small style="color: #6b7280;">Auto-refund if SMS not received</small>
+            `;
+        }
+    };
+    
+    // Update countdown immediately
+    displayCountdown();
     
     const interval = setInterval(async () => {
         attempts++;
+        
+        // Check if polling was cancelled
+        if (window.currentSmsPolling?.cancelled) {
+            clearInterval(interval);
+            console.log('🔴 SMS polling cancelled by user');
+            return;
+        }
+        
+        // Update countdown
+        displayCountdown();
+        
+        // Check if time is up
+        const elapsed = Date.now() - startTime;
+        if (elapsed >= timeoutMs) {
+            console.log('⏱️ SMS timeout reached');
+            const statusText = document.getElementById('smsStatusText');
+            if (statusText) {
+                statusText.innerHTML = `
+                    <span style="color: #10b981; font-weight: 700;">✅ Time expired</span><br>
+                    <span style="color: #6b7280; font-size: 13px;">Balance refunded automatically</span>
+                `;
+            }
+            document.getElementById('smsCodeBox').innerText = '✅ No SMS received - Balance refunded automatically';
+            clearInterval(interval);
+            
+            // Refresh balance and history
+            await updateBalance();
+            await loadSmsHistory();
+            return;
+        }
         
         try {
             const res = await fetch(`${API_BASE}/sms/check/${orderId}`);
@@ -1026,38 +1092,90 @@ async function pollSmsCode(orderId) {
             
             if (data.code) {
                 document.getElementById('smsCodeBox').innerText = `✅ SMS Code: ${data.code}`;
-                document.getElementById('smsStatusText').innerText = "✅ Code Received!";
-                document.getElementById('smsStatusText').style.color = '#10b981';
+                document.getElementById('smsStatusText').innerHTML = "<span style='color: #10b981; font-weight: 700;'>✅ Code Received!</span>";
                 clearInterval(interval);
-                loadSmsHistory();
+                
+                // Stop polling
+                window.currentSmsPolling.cancelled = true;
+                
+                await loadSmsHistory();
                 
                 // Show success notification
                 alert(`✅ SMS Code Received: ${data.code}`);
             }
             
-            if (data.status === 'CANCELLED' || data.status === 'TIMEOUT') {
-                document.getElementById('smsCodeBox').innerText = '❌ Order cancelled or timeout';
-                document.getElementById('smsStatusText').innerText = data.status;
+            if (data.status === 'CANCELLED') {
+                document.getElementById('smsCodeBox').innerText = '❌ Order cancelled - Balance refunded';
+                document.getElementById('smsStatusText').innerHTML = "<span style='color: #ef4444;'>Cancelled</span>";
                 clearInterval(interval);
-                loadSmsHistory();
+                window.currentSmsPolling.cancelled = true;
+                await loadSmsHistory();
+                await updateBalance();
             }
             
-            // Stop after max attempts
-            if (attempts >= maxAttempts) {
-                document.getElementById('smsCodeBox').innerText = '⏱️ Timeout - No SMS received';
-                document.getElementById('smsStatusText').innerText = 'Check SMS History';
+            if (data.status === 'EXPIRED') {
+                document.getElementById('smsCodeBox').innerText = '⏱️ No SMS received - Balance refunded automatically';
+                document.getElementById('smsStatusText').innerHTML = "<span style='color: #f59e0b;'>Expired</span>";
                 clearInterval(interval);
+                window.currentSmsPolling.cancelled = true;
+                await loadSmsHistory();
+                await updateBalance();
             }
             
         } catch (e) { 
-            console.error("❌ Polling failed:", e);
+            console.error('🔴 Polling failed:', e);
         }
     }, 5000); // Check every 5 seconds
+    
+    window.currentSmsPolling.interval = interval;
 }
+
+        async function cancelSmsOrder(orderId) {
+    if (!confirm('Cancel this SMS order and refund balance?')) {
+        return;
+    }
+    
+    try {
+        const res = await fetch(`${API_BASE}/sms/cancel/${orderId}`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' }
+        });
+        
+        const data = await res.json();
+        
+        if (res.ok) {
+            // Stop polling
+            if (window.currentSmsPolling) {
+                window.currentSmsPolling.cancelled = true;
+                if (window.currentSmsPolling.interval) {
+                    clearInterval(window.currentSmsPolling.interval);
+                }
+            }
+            
+            // Update UI
+            document.getElementById('smsCodeBox').innerText = `✅ Order cancelled - ₦${data.refundAmount} refunded to wallet`;
+            document.getElementById('smsStatusText').innerHTML = "<span style='color: #10b981;'>✅ Cancelled & Refunded</span>";
+            document.getElementById('smsCancelBtn').style.display = 'none';
+            
+            // Update balance and history
+            await updateBalance();
+            await loadDashboardStats();
+            await loadSmsHistory();
+            
+            alert(`✅ Order cancelled! ₦${data.refundAmount} has been refunded to your wallet.`);
+        } else {
+            alert('❌ ' + (data.error || 'Failed to cancel order'));
+        }
+    } catch (err) {
+        console.error('Cancel error:', err);
+        alert('❌ Error: ' + err.message);
+    }
+}
+
 
 async function loadSmsHistory() {
     const body = document.getElementById('smsHistoryBody');
-    body.innerHTML = '<tr><td colspan="6" style="text-align:center;">Loading...</td></tr>';
+    body.innerHTML = '<tr><td colspan="7" style="text-align:center;">Loading...</td></tr>';
     
     try {
         console.log('📜 Loading SMS history for user:', userId);
@@ -1068,13 +1186,24 @@ async function loadSmsHistory() {
         console.log('📜 SMS History:', rows);
         
         if (rows.length === 0) {
-            body.innerHTML = '<tr><td colspan="6" style="text-align:center; color:#999; padding: 40px;">No SMS orders yet. Purchase a number to get started!</td></tr>';
+            body.innerHTML = '<tr><td colspan="7" style="text-align:center; color:#999; padding: 40px;">No SMS orders yet. Purchase a number to get started!</td></tr>';
             return;
         }
         
         body.innerHTML = rows.map(o => {
-            const statusColor = o.status === 'COMPLETED' ? '#10b981' : '#f59e0b';
-            const statusBg = o.status === 'COMPLETED' ? '#d1fae5' : '#fef3c7';
+            const statusColor = o.status === 'COMPLETED' ? '#10b981' : o.status === 'CANCELLED' ? '#6b7280' : o.status === 'EXPIRED' ? '#f59e0b' : '#f59e0b';
+            const statusBg = o.status === 'COMPLETED' ? '#d1fae5' : o.status === 'CANCELLED' ? '#f3f4f6' : o.status === 'EXPIRED' ? '#fef3c7' : '#fef3c7';
+            
+            // Show countdown for waiting orders
+            let timeDisplay = '';
+            if (o.status === 'WAITING') {
+                const createdTime = new Date(o.created_at).getTime();
+                const expiryTime = createdTime + (25 * 60 * 1000);
+                const remaining = Math.max(0, expiryTime - Date.now());
+                const minutes = Math.floor(remaining / 60000);
+                const seconds = Math.floor((remaining % 60000) / 1000);
+                timeDisplay = `<br><small style="color: #f59e0b; font-weight: 600;">⏳ ${minutes}:${seconds.toString().padStart(2, '0')}</small>`;
+            }
             
             return `
                 <tr>
@@ -1092,14 +1221,21 @@ async function loadSmsHistory() {
                         <span class="status-pill" style="background:${statusBg}; color:${statusColor}; padding: 6px 12px; border-radius: 20px; font-weight: 700;">
                             ${o.status}
                         </span>
+                        ${timeDisplay}
+                    </td>
+                    <td>
+                        ${o.status === 'WAITING' 
+                            ? `<button onclick="cancelSmsOrder('${o._id}')" style="background: #ef4444; color: white; border: none; padding: 6px 12px; border-radius: 4px; font-size: 12px; font-weight: 600; cursor: pointer;">Cancel</button>`
+                            : '-'
+                        }
                     </td>
                 </tr>
             `;
         }).join('');
         
     } catch (e) { 
-        console.error('❌ SMS History Error:', e);
-        body.innerHTML = '<tr><td colspan="6" style="text-align:center; color:#ef4444;">Failed to load history</td></tr>'; 
+        console.error('🔴 SMS History Error:', e);
+        body.innerHTML = '<tr><td colspan="7" style="text-align:center; color:#ef4444;">Failed to load history</td></tr>'; 
     }
 }
 
@@ -1347,6 +1483,7 @@ async function loadSmsHistory() {
     </script>
 </body>
 </html>
+
 
 
 
