@@ -693,13 +693,15 @@ app.post('/api/sms/order', async (req, res) => {
         let orderData;
         
         try {
-            // Try authenticated endpoint first
+            // Try authenticated endpoint first with proper browser headers
             console.log('🔑 Trying authenticated endpoint...');
             const orderRes = await fetch(orderUrl, {
                 method: 'GET',
                 headers: {
                     'Authorization': `Bearer ${process.env.FIVESIM_API_KEY}`,
-                    'Accept': 'application/json'
+                    'Accept': 'application/json',
+                    'Content-Type': 'application/json',
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
                 }
             });
             
@@ -709,24 +711,39 @@ app.post('/api/sms/order', async (req, res) => {
             console.log('📦 Response length:', orderText.length);
             console.log('📦 First 300 chars:', orderText.substring(0, 300));
             
-            let isParseable = false;
-            try {
-                orderData = JSON.parse(orderText);
-                isParseable = true;
-                console.log('✅ Parsed successfully');
-            } catch (parseErr) {
-                console.log('⚠️ Could not parse as JSON, trying guest API instead...');
+            // Check if it's a Cloudflare challenge page
+            if (orderText.includes('Just a moment') || orderText.includes('challenge-platform') || orderText.includes('<!DOCTYPE')) {
+                console.log('⚠️ Got Cloudflare challenge page, trying guest API instead...');
+            } else {
+                let isParseable = false;
+                try {
+                    orderData = JSON.parse(orderText);
+                    isParseable = true;
+                    console.log('✅ Parsed successfully');
+                } catch (parseErr) {
+                    console.log('⚠️ Could not parse as JSON');
+                }
+                
+                // If authenticated worked, use it
+                if (isParseable && orderRes.ok && orderData.phone) {
+                    console.log('✅ Success! Phone:', orderData.phone);
+                    // Continue with the rest of the function...
+                } else if (!isParseable) {
+                    console.log('🔄 Falling back to guest API...');
+                }
             }
             
             // If authenticated failed or invalid response, try guest API
-            if (!isParseable || !orderRes.ok || !orderData.phone) {
-                console.log('🔄 Falling back to guest API...');
+            if (!orderData || !orderData.phone) {
+                console.log('🔄 Using guest API...');
                 const guestUrl = `https://5sim.net/v1/guest/buy/activation/${country}/${operator}/${service}`;
                 
                 const guestRes = await fetch(guestUrl, {
                     method: 'GET',
                     headers: {
-                        'Accept': 'application/json'
+                        'Accept': 'application/json',
+                        'Content-Type': 'application/json',
+                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
                     }
                 });
                 
@@ -735,16 +752,23 @@ app.post('/api/sms/order', async (req, res) => {
                 const guestText = await guestRes.text();
                 console.log('📦 Guest response (first 300 chars):', guestText.substring(0, 300));
                 
+                // Check for Cloudflare challenge
+                if (guestText.includes('Just a moment') || guestText.includes('challenge-platform')) {
+                    console.error('❌ Cloudflare is blocking all requests. Cannot reach SMS provider.');
+                    return res.status(500).json({ error: 'SMS provider is temporarily unavailable. Try again in a few moments.' });
+                }
+                
                 try {
                     orderData = JSON.parse(guestText);
                     console.log('✅ Guest API parsed successfully');
                 } catch (parseErr) {
-                    console.error('❌ Guest API also returned invalid JSON');
-                    console.error('Response:', guestText);
+                    console.error('❌ Guest API returned invalid data');
+                    console.error('Response:', guestText.substring(0, 200));
                     return res.status(400).json({ error: 'Invalid response from SMS provider' });
                 }
                 
                 if (!guestRes.ok) {
+                    console.error('❌ Guest API error:', orderData);
                     return res.status(400).json({ error: orderData.message || 'Guest API failed' });
                 }
             }
@@ -755,7 +779,7 @@ app.post('/api/sms/order', async (req, res) => {
                 return res.status(400).json({ error: 'No phone number received from provider' });
             }
             
-            console.log('✅ Success! Phone:', orderData.phone);
+            console.log('✅ Final success! Phone:', orderData.phone);
             
         } catch (err) {
             console.error('❌ Error:', err.message);
