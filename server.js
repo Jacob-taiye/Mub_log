@@ -635,121 +635,155 @@ app.get('/api/sms/live-config/:service', async (req, res) => {
 
 const AUTO_REFUND_TIMEOUT = 25 * 60 * 1000; // 25 minutes in milliseconds
 
+// REPLACE THE /api/sms/order ENDPOINT IN server.js WITH THIS:
+
 app.post('/api/sms/order', async (req, res) => {
     try {
         const { userId, service, country, operator } = req.body;
         const EXCHANGE_RATE = 30; // 1 USD = 30 NGN
         const MARKUP_PERCENTAGE = 20; // 20% profit margin
         
-        const priceRes = await fetch(`https://5sim.net/v1/guest/prices?product=${service}`);
-        const priceData = await priceRes.json();
-        
-        // Calculate price using same formula
-        const apiPrice = priceData[service][country][operator].cost; // Price in USD
-        const priceInNGN = apiPrice * EXCHANGE_RATE; // Convert to NGN
-        const finalPrice = Math.ceil(priceInNGN * (1 + MARKUP_PERCENTAGE / 100)); // Add 20% markup
-        
-        console.log(`💰 SMS Order pricing:`, {
-            apiPrice: `$${apiPrice}`,
-            priceInNGN: `₦${priceInNGN.toFixed(2)}`,
-            finalPrice: `₦${finalPrice}`
-        });
-        
-        const userIdObj = toObjectId(userId);
-        const user = await getCollection('users').findOne({ _id: userIdObj });
-        
-        if (!user) {
-            return res.status(404).json({ error: 'User not found' });
+        // Validate inputs
+        if (!userId || !service || !country || !operator) {
+            return res.status(400).json({ error: 'Missing required fields' });
         }
         
-        if (user.balance < finalPrice) {
-            return res.status(400).json({ 
-                error: `Insufficient balance. Need ₦${finalPrice}, You have ₦${user.balance}` 
+        try {
+            const priceRes = await fetch(`https://5sim.net/v1/guest/prices?product=${service}`);
+            const priceData = await priceRes.json();
+            
+            // Check if service exists
+            if (!priceData[service] || !priceData[service][country] || !priceData[service][country][operator]) {
+                return res.status(400).json({ error: 'Service/Country/Operator not available' });
+            }
+            
+            // Calculate price using same formula
+            const apiPrice = priceData[service][country][operator].cost; // Price in USD
+            const priceInNGN = apiPrice * EXCHANGE_RATE; // Convert to NGN
+            const finalPrice = Math.ceil(priceInNGN * (1 + MARKUP_PERCENTAGE / 100)); // Add 20% markup
+            
+            console.log(`💰 SMS Order pricing:`, {
+                apiPrice: `$${apiPrice}`,
+                priceInNGN: `₦${priceInNGN.toFixed(2)}`,
+                finalPrice: `₦${finalPrice}`
             });
-        }
-        
-        const orderRes = await fetch(
-            `https://5sim.net/v1/user/buy/activation/${country}/${operator}/${service}`,
-            {
-                headers: {
-                    'Authorization': `Bearer ${process.env.FIVESIM_API_KEY}`,
-                    'Accept': 'application/json'
-                }
+            
+            const userIdObj = toObjectId(userId);
+            const user = await getCollection('users').findOne({ _id: userIdObj });
+            
+            if (!user) {
+                return res.status(404).json({ error: 'User not found' });
             }
-        );
-        
-        const orderData = await orderRes.json();
-        
-        if (!orderRes.ok) {
-            return res.status(400).json({ error: orderData.message || 'Order failed' });
-        }
-        
-        // Deduct balance from user
-        await getCollection('users').updateOne(
-            { _id: userIdObj },
-            { $inc: { balance: -finalPrice } }
-        );
-        
-        // Create SMS order record with expiry time
-        const result = await getCollection('sms_orders').insertOne({
-            user_id: String(userId),
-            service,
-            country,
-            operator,
-            phone: orderData.phone,
-            price: finalPrice,
-            activation_id: orderData.id,
-            status: 'WAITING',
-            sms_code: null,
-            created_at: new Date(),
-            expires_at: new Date(Date.now() + AUTO_REFUND_TIMEOUT)
-        });
-        
-        console.log(`✅ SMS order created:`, result.insertedId);
-        
-        // Set auto-refund timeout (25 minutes)
-        setTimeout(async () => {
-            try {
-                const order = await getCollection('sms_orders').findOne({ _id: result.insertedId });
+            
+            if (user.balance < finalPrice) {
+                return res.status(400).json({ 
+                    error: `Insufficient balance. Need ₦${finalPrice}, You have ₦${user.balance}` 
+                });
+            }
+            
+            // Make the actual SMS order
+            const orderRes = await fetch(
+                `https://5sim.net/v1/user/buy/activation/${country}/${operator}/${service}`,
+                {
+                    headers: {
+                        'Authorization': `Bearer ${process.env.FIVESIM_API_KEY}`,
+                        'Accept': 'application/json'
+                    }
+                }
+            );
+            
+            const orderData = await orderRes.json();
+            
+            if (!orderRes.ok) {
+                // Handle 5sim API errors properly
+                console.error('5sim API error:', orderData);
                 
-                // Only refund if order is still waiting
-                if (order && order.status === 'WAITING') {
-                    const refundUserIdObj = toObjectId(order.user_id);
-                    
-                    // Refund the user
-                    await getCollection('users').updateOne(
-                        { _id: refundUserIdObj },
-                        { $inc: { balance: order.price } }
-                    );
-                    
-                    // Mark as expired
-                    await getCollection('sms_orders').updateOne(
-                        { _id: result.insertedId },
-                        { $set: { status: 'EXPIRED', expired_at: new Date() } }
-                    );
-                    
-                    console.log(`✅ Auto-refund applied for order ${result.insertedId} - Amount: ₦${order.price}`);
+                // Check for specific error messages from 5sim
+                if (orderData.message) {
+                    return res.status(400).json({ error: `API Error: ${orderData.message}` });
                 }
-            } catch (err) {
-                console.error('❌ Auto-refund error:', err);
+                if (orderData.error) {
+                    return res.status(400).json({ error: `API Error: ${orderData.error}` });
+                }
+                
+                return res.status(400).json({ error: 'Failed to create SMS order. No phones available.' });
             }
-        }, AUTO_REFUND_TIMEOUT);
-        
-        // Return success response
-        res.json({
-            orderId: result.insertedId,
-            phone: orderData.phone,
-            price: finalPrice,
-            timeoutSeconds: 1500, // 25 minutes
-            message: 'SMS number purchased successfully'
-        });
+            
+            // Check if phone was actually returned
+            if (!orderData.phone || !orderData.id) {
+                return res.status(400).json({ error: 'Failed to get phone number from provider' });
+            }
+            
+            // Deduct balance from user
+            await getCollection('users').updateOne(
+                { _id: userIdObj },
+                { $inc: { balance: -finalPrice } }
+            );
+            
+            // Create SMS order record with expiry time
+            const result = await getCollection('sms_orders').insertOne({
+                user_id: String(userId),
+                service,
+                country,
+                operator,
+                phone: orderData.phone,
+                price: finalPrice,
+                activation_id: orderData.id,
+                status: 'WAITING',
+                sms_code: null,
+                created_at: new Date(),
+                expires_at: new Date(Date.now() + AUTO_REFUND_TIMEOUT)
+            });
+            
+            console.log(`✅ SMS order created:`, result.insertedId);
+            
+            // Set auto-refund timeout (25 minutes)
+            setTimeout(async () => {
+                try {
+                    const order = await getCollection('sms_orders').findOne({ _id: result.insertedId });
+                    
+                    // Only refund if order is still waiting
+                    if (order && order.status === 'WAITING') {
+                        const refundUserIdObj = toObjectId(order.user_id);
+                        
+                        // Refund the user
+                        await getCollection('users').updateOne(
+                            { _id: refundUserIdObj },
+                            { $inc: { balance: order.price } }
+                        );
+                        
+                        // Mark as expired
+                        await getCollection('sms_orders').updateOne(
+                            { _id: result.insertedId },
+                            { $set: { status: 'EXPIRED', expired_at: new Date() } }
+                        );
+                        
+                        console.log(`✅ Auto-refund applied for order ${result.insertedId} - Amount: ₦${order.price}`);
+                    }
+                } catch (err) {
+                    console.error('❌ Auto-refund error:', err);
+                }
+            }, AUTO_REFUND_TIMEOUT);
+            
+            // Return success response
+            return res.json({
+                orderId: result.insertedId,
+                phone: orderData.phone,
+                price: finalPrice,
+                timeoutSeconds: 1500, // 25 minutes
+                message: 'SMS number purchased successfully'
+            });
+            
+        } catch (fetchErr) {
+            console.error('Fetch error:', fetchErr);
+            return res.status(500).json({ error: 'Failed to connect to SMS provider. Try again later.' });
+        }
         
     } catch (err) {
         console.error('SMS order error:', err);
-        res.status(500).json({ error: err.message });
+        return res.status(500).json({ error: err.message || 'Internal server error' });
     }
 });
-
 // ============================================
 // 📱 SMS CHECK ENDPOINT
 // ============================================
