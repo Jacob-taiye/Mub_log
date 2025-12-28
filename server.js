@@ -684,8 +684,11 @@ app.post('/api/sms/order', async (req, res) => {
         
         // Create SMS order with API key
         const orderUrl = `https://5sim.net/v1/user/buy/activation/${country}/${operator}/${service}`;
-        console.log('📞 Order URL:', orderUrl);
-        console.log('🔑 API Key length:', process.env.FIVESIM_API_KEY ? process.env.FIVESIM_API_KEY.length : 0);
+        console.log('📞 Creating SMS order...');
+        console.log('Service:', service);
+        console.log('Country:', country);
+        console.log('Operator:', operator);
+        console.log('URL:', orderUrl);
         
         let orderData;
         
@@ -698,74 +701,51 @@ app.post('/api/sms/order', async (req, res) => {
                 }
             });
             
-            console.log('📡 Response status:', orderRes.status);
-            console.log('📡 Response headers:', {
-                'content-type': orderRes.headers.get('content-type'),
-                'content-length': orderRes.headers.get('content-length')
-            });
+            console.log('📡 Status:', orderRes.status);
+            console.log('📡 OK:', orderRes.ok);
             
             const orderText = await orderRes.text();
-            console.log('📦 Raw response length:', orderText.length);
-            console.log('📦 Raw response (first 300 chars):', orderText.substring(0, 300));
+            console.log('📦 Response length:', orderText.length);
+            console.log('📦 First 500 chars:', orderText.substring(0, 500));
             
             if (!orderText || orderText.trim() === '') {
-                console.error('❌ Empty response from 5sim');
-                return res.status(400).json({ error: 'Empty response from SMS provider. Verify your API key is valid.' });
+                console.error('❌ Empty response');
+                return res.status(400).json({ error: 'Empty response from provider. Try again.' });
             }
             
-            // Check if response is HTML (error page)
-            if (orderText.includes('<!DOCTYPE') || orderText.includes('<html') || orderText.includes('<head')) {
-                console.error('❌ Got HTML response instead of JSON');
-                console.error('Response:', orderText.substring(0, 500));
-                return res.status(400).json({ error: 'API returned HTML error page. Check your API key validity.' });
+            // Check if HTML error
+            if (orderText.trim().startsWith('<')) {
+                console.error('❌ HTML response:', orderText.substring(0, 200));
+                return res.status(400).json({ error: 'Provider returned error. Check country/operator is valid.' });
             }
             
-            // Try to parse JSON
-            let orderData;
+            // Parse JSON
             try {
                 orderData = JSON.parse(orderText);
+                console.log('✅ Parsed:', orderData);
             } catch (parseErr) {
-                console.error('❌ JSON parse error:', parseErr.message);
-                console.error('Response text:', orderText.substring(0, 300));
-                
-                // Try to extract error message if possible
-                if (orderText.includes('Unauthorized') || orderText.includes('401')) {
-                    return res.status(400).json({ error: 'API key is unauthorized. Check if it\'s valid.' });
-                }
-                
-                return res.status(400).json({ error: `Invalid response from provider: ${orderText.substring(0, 50)}` });
+                console.error('❌ Parse failed:', parseErr.message);
+                console.error('Text was:', orderText);
+                return res.status(400).json({ error: 'Invalid response format' });
             }
             
-            console.log('✅ Parsed response:', JSON.stringify(orderData).substring(0, 200));
-            
+            // Check for errors
             if (!orderRes.ok) {
-                console.error('❌ API error (status ' + orderRes.status + '):', orderData);
-                
-                if (orderData.message === 'no free phones') {
-                    return res.status(400).json({ error: 'No phones available. Try another operator.' });
-                }
-                
-                if (orderData.message) {
-                    return res.status(400).json({ error: orderData.message });
-                }
-                
-                if (orderData.error) {
-                    return res.status(400).json({ error: orderData.error });
-                }
-                
-                return res.status(400).json({ error: `API Error (${orderRes.status}): Failed to purchase SMS` });
+                console.error('❌ Error response:', orderData);
+                return res.status(400).json({ error: orderData.message || 'Failed to create order' });
             }
             
+            // Validate phone received
             if (!orderData.phone || !orderData.id) {
-                console.error('❌ Missing phone or id in response:', orderData);
-                return res.status(400).json({ error: 'No phone number received from provider' });
+                console.error('❌ Missing data:', orderData);
+                return res.status(400).json({ error: 'No phone received from provider' });
             }
             
-            console.log('✅ Phone number received:', orderData.phone);
+            console.log('✅ Success! Phone:', orderData.phone, 'ID:', orderData.id);
             
-        } catch (fetchErr) {
-            console.error('❌ Network fetch error:', fetchErr);
-            return res.status(500).json({ error: `Network error: ${fetchErr.message}` });
+        } catch (err) {
+            console.error('❌ Fetch error:', err.message);
+            return res.status(500).json({ error: err.message });
         }
         
         // Deduct balance
