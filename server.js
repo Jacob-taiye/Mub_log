@@ -700,7 +700,51 @@ app.post('/api/sms/order', async (req, res) => {
             sms_code: null,
             created_at: new Date()
         });
+
+        const result = await getCollection('sms_orders').insertOne({
+    user_id: userId,
+    service,
+    country,
+    operator,
+    phone: orderData.phone,
+    price: finalPrice,
+    activation_id: orderData.id,
+    status: 'WAITING',
+    sms_code: null,
+    created_at: new Date(),
+    expires_at: new Date(Date.now() + AUTO_REFUND_TIMEOUT)
+});
+
+// Set auto-refund timeout
+setTimeout(async () => {
+    const order = await getCollection('sms_orders').findOne({ _id: result.insertedId });
+    
+    if (order && order.status === 'WAITING') {
+        // Refund the user
+        const userIdObj = toObjectId(order.user_id);
+        await getCollection('users').updateOne(
+            { _id: userIdObj },
+            { $inc: { balance: order.price } }
+        );
         
+        // Mark as expired
+        await getCollection('sms_orders').updateOne(
+            { _id: result.insertedId },
+            { $set: { status: 'EXPIRED', expired_at: new Date() } }
+        );
+        
+        console.log(`✅ Auto-refund applied for order ${result.insertedId}`);
+    }
+}, AUTO_REFUND_TIMEOUT);
+
+res.json({
+    orderId: result.insertedId,
+    phone: orderData.phone,
+    price: finalPrice,
+    timeoutSeconds: 1500, // 25 minutes
+    message: 'SMS number purchased successfully'
+});
+        const AUTO_REFUND_TIMEOUT = 25 * 60 * 1000;
         res.json({
             orderId: result.insertedId,
             phone: orderData.phone,
@@ -744,6 +788,42 @@ app.get('/api/sms/check/:orderId', async (req, res) => {
             res.json({ code: null, status: order.status });
         }
     } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+app.post('/api/sms/cancel/:orderId', async (req, res) => {
+    try {
+        const orderIdObj = toObjectId(req.params.orderId);
+        const order = await getCollection('sms_orders').findOne({ _id: orderIdObj });
+        
+        if (!order) {
+            return res.status(404).json({ error: 'Order not found' });
+        }
+        
+        if (['COMPLETED', 'CANCELLED'].includes(order.status)) {
+            return res.status(400).json({ error: 'Cannot cancel this order' });
+        }
+        
+        // Refund the user
+        const userIdObj = toObjectId(order.user_id);
+        await getCollection('users').updateOne(
+            { _id: userIdObj },
+            { $inc: { balance: order.price } }
+        );
+        
+        // Mark order as cancelled
+        await getCollection('sms_orders').updateOne(
+            { _id: orderIdObj },
+            { $set: { status: 'CANCELLED', cancelled_at: new Date() } }
+        );
+        
+        res.json({ 
+            message: 'Order cancelled and balance refunded',
+            refundAmount: order.price
+        });
+    } catch (err) {
+        console.error('SMS cancel error:', err);
         res.status(500).json({ error: err.message });
     }
 });
