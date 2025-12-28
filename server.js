@@ -156,6 +156,60 @@ app.get('/api/health', (req, res) => {
 });
 
 // ============================================
+// 🔧 DEBUG: TEST SMS API KEY
+// ============================================
+
+app.get('/api/debug/sms-test', async (req, res) => {
+    try {
+        console.log('🔧 Testing SMS API...');
+        
+        const apiKey = process.env.FIVESIM_API_KEY;
+        console.log('API Key exists:', !!apiKey);
+        console.log('API Key length:', apiKey ? apiKey.length : 0);
+        console.log('API Key starts with:', apiKey ? apiKey.substring(0, 10) : 'N/A');
+        
+        // Test 1: Guest API (no auth)
+        console.log('\n📍 Test 1: Guest Prices API (no auth)...');
+        const guestPricesRes = await fetch('https://5sim.net/v1/guest/prices?product=whatsapp');
+        const guestPricesText = await guestPricesRes.text();
+        console.log('Status:', guestPricesRes.status);
+        console.log('Response (first 200 chars):', guestPricesText.substring(0, 200));
+        
+        // Test 2: User API with key
+        console.log('\n📍 Test 2: User API (with auth)...');
+        const userRes = await fetch('https://5sim.net/v1/user/profile', {
+            headers: {
+                'Authorization': `Bearer ${apiKey}`,
+                'Accept': 'application/json'
+            }
+        });
+        const userText = await userRes.text();
+        console.log('Status:', userRes.status);
+        console.log('Response:', userText.substring(0, 300));
+        
+        res.json({
+            apiKeyConfigured: !!apiKey,
+            apiKeyLength: apiKey ? apiKey.length : 0,
+            test1_guestAPI: {
+                status: guestPricesRes.status,
+                success: guestPricesRes.ok
+            },
+            test2_userAPI: {
+                status: userRes.status,
+                success: userRes.ok
+            },
+            recommendation: userRes.ok ? '✅ API key is valid!' : '❌ API key may be invalid or expired'
+        });
+        
+    } catch (err) {
+        res.json({
+            error: err.message,
+            suggestion: 'Check if 5sim.net is accessible'
+        });
+    }
+});
+
+// ============================================
 // AUTH ROUTES
 // ============================================
 
@@ -631,7 +685,7 @@ app.post('/api/sms/order', async (req, res) => {
         // Create SMS order with API key
         const orderUrl = `https://5sim.net/v1/user/buy/activation/${country}/${operator}/${service}`;
         console.log('📞 Order URL:', orderUrl);
-        console.log('🔑 API Key set:', !!process.env.FIVESIM_API_KEY);
+        console.log('🔑 API Key length:', process.env.FIVESIM_API_KEY ? process.env.FIVESIM_API_KEY.length : 0);
         
         let orderData;
         
@@ -645,28 +699,47 @@ app.post('/api/sms/order', async (req, res) => {
             });
             
             console.log('📡 Response status:', orderRes.status);
-            console.log('📡 Response OK:', orderRes.ok);
+            console.log('📡 Response headers:', {
+                'content-type': orderRes.headers.get('content-type'),
+                'content-length': orderRes.headers.get('content-length')
+            });
             
             const orderText = await orderRes.text();
-            console.log('📦 Raw response:', orderText.substring(0, 500));
+            console.log('📦 Raw response length:', orderText.length);
+            console.log('📦 Raw response (first 300 chars):', orderText.substring(0, 300));
             
             if (!orderText || orderText.trim() === '') {
                 console.error('❌ Empty response from 5sim');
-                return res.status(400).json({ error: 'Empty response from SMS provider. Check your API key.' });
+                return res.status(400).json({ error: 'Empty response from SMS provider. Verify your API key is valid.' });
             }
             
+            // Check if response is HTML (error page)
+            if (orderText.includes('<!DOCTYPE') || orderText.includes('<html') || orderText.includes('<head')) {
+                console.error('❌ Got HTML response instead of JSON');
+                console.error('Response:', orderText.substring(0, 500));
+                return res.status(400).json({ error: 'API returned HTML error page. Check your API key validity.' });
+            }
+            
+            // Try to parse JSON
+            let orderData;
             try {
                 orderData = JSON.parse(orderText);
             } catch (parseErr) {
-                console.error('❌ JSON parse error:', parseErr);
-                console.error('Response text:', orderText);
-                return res.status(400).json({ error: 'Invalid JSON from SMS provider' });
+                console.error('❌ JSON parse error:', parseErr.message);
+                console.error('Response text:', orderText.substring(0, 300));
+                
+                // Try to extract error message if possible
+                if (orderText.includes('Unauthorized') || orderText.includes('401')) {
+                    return res.status(400).json({ error: 'API key is unauthorized. Check if it\'s valid.' });
+                }
+                
+                return res.status(400).json({ error: `Invalid response from provider: ${orderText.substring(0, 50)}` });
             }
             
-            console.log('✅ Parsed response:', orderData);
+            console.log('✅ Parsed response:', JSON.stringify(orderData).substring(0, 200));
             
             if (!orderRes.ok) {
-                console.error('❌ API error response:', orderData);
+                console.error('❌ API error (status ' + orderRes.status + '):', orderData);
                 
                 if (orderData.message === 'no free phones') {
                     return res.status(400).json({ error: 'No phones available. Try another operator.' });
@@ -680,7 +753,7 @@ app.post('/api/sms/order', async (req, res) => {
                     return res.status(400).json({ error: orderData.error });
                 }
                 
-                return res.status(400).json({ error: 'Failed to purchase SMS number' });
+                return res.status(400).json({ error: `API Error (${orderRes.status}): Failed to purchase SMS` });
             }
             
             if (!orderData.phone || !orderData.id) {
