@@ -408,9 +408,9 @@
                     localStorage.setItem('email', data.user.email);
 
                     if (data.user.role === 'admin') {
-                        window.location.href = 'admin.html';
+                        window.location.href = '/admin';
                     } else {
-                        window.location.href = 'index.html';
+                        window.location.href = '/';
                     }
                 } else {
                     showError(data.msg || 'Invalid email or password');
@@ -428,6 +428,7 @@
 </body>
 
 </html>
+
 
 
 
