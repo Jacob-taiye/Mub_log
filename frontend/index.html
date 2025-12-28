@@ -958,7 +958,7 @@ async function purchaseSms() {
     const service = document.getElementById('smsServiceSelect').value;
     const countryData = document.getElementById('smsCountrySelect').value;
     
-    console.log('📱 Purchase attempt:', { service, countryData });
+    console.log('🔱 Purchase attempt:', { service, countryData });
     
     if (!service || !countryData) {
         alert("⚠️ Please select both service and country");
@@ -972,7 +972,7 @@ async function purchaseSms() {
     }
 
     try {
-        console.log('📱 Sending order...');
+        console.log('🔱 Sending order...');
         
         const res = await fetch(`${API_BASE}/sms/order`, {
             method: 'POST',
@@ -981,25 +981,60 @@ async function purchaseSms() {
         });
         
         const data = await res.json();
-        console.log('📱 Order response:', data);
+        console.log('🔱 Order response:', data);
         
         if (!res.ok) {
             alert("❌ " + (data.error || data.message || "Purchase failed"));
             return;
         }
 
-        // Success - show result
+        // Success - show result box
         alert("✅ SMS Number purchased!\nPhone: " + data.phone);
         
-        document.getElementById('smsResultBox').style.display = 'block';
-        document.getElementById('smsPhone').innerText = data.phone;
-        document.getElementById('smsStatusText').innerText = 'Waiting for SMS...';
-        document.getElementById('smsCodeBox').innerText = 'Waiting for verification code...';
-
+        // Clear previous content
+        const resultBox = document.getElementById('smsResultBox');
+        resultBox.style.display = 'block';
+        resultBox.innerHTML = '';
+        
+        // Create result content
+        const html = `
+            <div style="background: #f0fdf4; border: 1px solid #10b981; padding: 15px; border-radius: 8px;">
+                <div style="margin-bottom: 10px;">
+                    <strong>📱 Phone Number:</strong>
+                    <code style="background: white; padding: 6px 10px; border-radius: 4px; margin-left: 8px;">${data.phone}</code>
+                </div>
+                <div style="margin-bottom: 15px;">
+                    <strong>Status:</strong>
+                    <div id="smsStatusText" style="margin-top: 8px; font-size: 16px;"></div>
+                </div>
+                <div style="background: white; padding: 10px; border-radius: 6px; margin-bottom: 15px; border-left: 4px solid #4f46e5;">
+                    <code id="smsCodeBox" style="display: block; color: #111827; font-size: 13px; word-break: break-all;">
+                        ⏳ Waiting for verification code...
+                    </code>
+                </div>
+                <div style="display: flex; gap: 10px;">
+                    <button 
+                        id="smsCancelBtn"
+                        style="flex: 1; background: #ef4444; color: white; border: none; padding: 10px; border-radius: 6px; font-weight: 600; cursor: pointer; transition: 0.2s;"
+                        onmouseover="this.style.background='#dc2626'"
+                        onmouseout="this.style.background='#ef4444'"
+                    >
+                        <i class="fas fa-times"></i> Cancel & Refund
+                    </button>
+                    <button 
+                        onclick="loadSmsHistory()" 
+                        style="flex: 1; background: #4f46e5; color: white; border: none; padding: 10px; border-radius: 6px; font-weight: 600; cursor: pointer;"
+                    >
+                        <i class="fas fa-history"></i> View History
+                    </button>
+                </div>
+            </div>
+        `;
+        
+        resultBox.innerHTML = html;
+        
+        // Attach cancel button handler
         document.getElementById('smsCancelBtn').onclick = () => cancelSmsOrder(data.orderId);
-
-// Start polling for SMS code
-pollSmsCode(data.orderId);
         
         // Start polling for SMS code
         pollSmsCode(data.orderId);
@@ -1013,12 +1048,11 @@ pollSmsCode(data.orderId);
         alert("❌ Network error: " + e.message); 
     }
 }
-
 async function pollSmsCode(orderId) {
     console.log('🔄 Polling for SMS code:', orderId);
     
     let attempts = 0;
-    const maxAttempts = 300; // 25 minutes = 1500 seconds / 5 seconds per attempt
+    const maxAttempts = 300; // 25 minutes
     let timeoutMs = 25 * 60 * 1000; // 25 minutes
     const startTime = Date.now();
     
@@ -1067,7 +1101,7 @@ async function pollSmsCode(orderId) {
         // Check if time is up
         const elapsed = Date.now() - startTime;
         if (elapsed >= timeoutMs) {
-            console.log('⏱️ SMS timeout reached');
+            console.log('⏱️ SMS timeout reached - triggering refund');
             const statusText = document.getElementById('smsStatusText');
             if (statusText) {
                 statusText.innerHTML = `
@@ -1076,6 +1110,8 @@ async function pollSmsCode(orderId) {
                 `;
             }
             document.getElementById('smsCodeBox').innerText = '✅ No SMS received - Balance refunded automatically';
+            const cancelBtn = document.getElementById('smsCancelBtn');
+            if (cancelBtn) cancelBtn.style.display = 'none';
             clearInterval(interval);
             
             // Refresh balance and history
@@ -1093,6 +1129,8 @@ async function pollSmsCode(orderId) {
             if (data.code) {
                 document.getElementById('smsCodeBox').innerText = `✅ SMS Code: ${data.code}`;
                 document.getElementById('smsStatusText').innerHTML = "<span style='color: #10b981; font-weight: 700;'>✅ Code Received!</span>";
+                const cancelBtn = document.getElementById('smsCancelBtn');
+                if (cancelBtn) cancelBtn.style.display = 'none';
                 clearInterval(interval);
                 
                 // Stop polling
@@ -1107,6 +1145,8 @@ async function pollSmsCode(orderId) {
             if (data.status === 'CANCELLED') {
                 document.getElementById('smsCodeBox').innerText = '❌ Order cancelled - Balance refunded';
                 document.getElementById('smsStatusText').innerHTML = "<span style='color: #ef4444;'>Cancelled</span>";
+                const cancelBtn = document.getElementById('smsCancelBtn');
+                if (cancelBtn) cancelBtn.style.display = 'none';
                 clearInterval(interval);
                 window.currentSmsPolling.cancelled = true;
                 await loadSmsHistory();
@@ -1116,6 +1156,8 @@ async function pollSmsCode(orderId) {
             if (data.status === 'EXPIRED') {
                 document.getElementById('smsCodeBox').innerText = '⏱️ No SMS received - Balance refunded automatically';
                 document.getElementById('smsStatusText').innerHTML = "<span style='color: #f59e0b;'>Expired</span>";
+                const cancelBtn = document.getElementById('smsCancelBtn');
+                if (cancelBtn) cancelBtn.style.display = 'none';
                 clearInterval(interval);
                 window.currentSmsPolling.cancelled = true;
                 await loadSmsHistory();
@@ -1130,7 +1172,7 @@ async function pollSmsCode(orderId) {
     window.currentSmsPolling.interval = interval;
 }
 
-        async function cancelSmsOrder(orderId) {
+  async function cancelSmsOrder(orderId) {
     if (!confirm('Cancel this SMS order and refund balance?')) {
         return;
     }
@@ -1155,7 +1197,8 @@ async function pollSmsCode(orderId) {
             // Update UI
             document.getElementById('smsCodeBox').innerText = `✅ Order cancelled - ₦${data.refundAmount} refunded to wallet`;
             document.getElementById('smsStatusText').innerHTML = "<span style='color: #10b981;'>✅ Cancelled & Refunded</span>";
-            document.getElementById('smsCancelBtn').style.display = 'none';
+            const cancelBtn = document.getElementById('smsCancelBtn');
+            if (cancelBtn) cancelBtn.style.display = 'none';
             
             // Update balance and history
             await updateBalance();
@@ -1171,7 +1214,6 @@ async function pollSmsCode(orderId) {
         alert('❌ Error: ' + err.message);
     }
 }
-
 
 async function loadSmsHistory() {
     const body = document.getElementById('smsHistoryBody');
@@ -1483,6 +1525,7 @@ async function loadSmsHistory() {
     </script>
 </body>
 </html>
+
 
 
 
