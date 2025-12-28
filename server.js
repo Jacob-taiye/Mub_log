@@ -693,6 +693,8 @@ app.post('/api/sms/order', async (req, res) => {
         let orderData;
         
         try {
+            // Try authenticated endpoint first
+            console.log('🔑 Trying authenticated endpoint...');
             const orderRes = await fetch(orderUrl, {
                 method: 'GET',
                 headers: {
@@ -702,49 +704,61 @@ app.post('/api/sms/order', async (req, res) => {
             });
             
             console.log('📡 Status:', orderRes.status);
-            console.log('📡 OK:', orderRes.ok);
             
             const orderText = await orderRes.text();
             console.log('📦 Response length:', orderText.length);
-            console.log('📦 First 500 chars:', orderText.substring(0, 500));
+            console.log('📦 First 300 chars:', orderText.substring(0, 300));
             
-            if (!orderText || orderText.trim() === '') {
-                console.error('❌ Empty response');
-                return res.status(400).json({ error: 'Empty response from provider. Try again.' });
-            }
-            
-            // Check if HTML error
-            if (orderText.trim().startsWith('<')) {
-                console.error('❌ HTML response:', orderText.substring(0, 200));
-                return res.status(400).json({ error: 'Provider returned error. Check country/operator is valid.' });
-            }
-            
-            // Parse JSON
+            let isParseable = false;
             try {
                 orderData = JSON.parse(orderText);
-                console.log('✅ Parsed:', orderData);
+                isParseable = true;
+                console.log('✅ Parsed successfully');
             } catch (parseErr) {
-                console.error('❌ Parse failed:', parseErr.message);
-                console.error('Text was:', orderText);
-                return res.status(400).json({ error: 'Invalid response format' });
+                console.log('⚠️ Could not parse as JSON, trying guest API instead...');
             }
             
-            // Check for errors
-            if (!orderRes.ok) {
-                console.error('❌ Error response:', orderData);
-                return res.status(400).json({ error: orderData.message || 'Failed to create order' });
+            // If authenticated failed or invalid response, try guest API
+            if (!isParseable || !orderRes.ok || !orderData.phone) {
+                console.log('🔄 Falling back to guest API...');
+                const guestUrl = `https://5sim.net/v1/guest/buy/activation/${country}/${operator}/${service}`;
+                
+                const guestRes = await fetch(guestUrl, {
+                    method: 'GET',
+                    headers: {
+                        'Accept': 'application/json'
+                    }
+                });
+                
+                console.log('📡 Guest status:', guestRes.status);
+                
+                const guestText = await guestRes.text();
+                console.log('📦 Guest response (first 300 chars):', guestText.substring(0, 300));
+                
+                try {
+                    orderData = JSON.parse(guestText);
+                    console.log('✅ Guest API parsed successfully');
+                } catch (parseErr) {
+                    console.error('❌ Guest API also returned invalid JSON');
+                    console.error('Response:', guestText);
+                    return res.status(400).json({ error: 'Invalid response from SMS provider' });
+                }
+                
+                if (!guestRes.ok) {
+                    return res.status(400).json({ error: orderData.message || 'Guest API failed' });
+                }
             }
             
-            // Validate phone received
-            if (!orderData.phone || !orderData.id) {
-                console.error('❌ Missing data:', orderData);
-                return res.status(400).json({ error: 'No phone received from provider' });
+            // Validate we have phone data
+            if (!orderData || !orderData.phone || !orderData.id) {
+                console.error('❌ No phone in response:', orderData);
+                return res.status(400).json({ error: 'No phone number received from provider' });
             }
             
-            console.log('✅ Success! Phone:', orderData.phone, 'ID:', orderData.id);
+            console.log('✅ Success! Phone:', orderData.phone);
             
         } catch (err) {
-            console.error('❌ Fetch error:', err.message);
+            console.error('❌ Error:', err.message);
             return res.status(500).json({ error: err.message });
         }
         
