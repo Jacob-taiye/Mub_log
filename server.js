@@ -625,46 +625,77 @@ app.post('/api/sms/order', async (req, res) => {
         // Create SMS order on 5sim
         const orderUrl = `https://5sim.net/v1/user/buy/activation/${country}/${operator}/${service}`;
         console.log('📞 Order URL:', orderUrl);
+        console.log('🔑 Using API Key:', process.env.FIVESIM_API_KEY.substring(0, 10) + '...');
         
         const orderRes = await fetch(orderUrl, {
             method: 'GET',
             headers: {
                 'Authorization': `Bearer ${process.env.FIVESIM_API_KEY}`,
-                'Accept': 'application/json'
+                'Accept': 'application/json',
+                'Content-Type': 'application/json'
             }
         });
         
+        console.log('📡 Response status:', orderRes.status);
+        
         const orderText = await orderRes.text();
+        console.log('📦 Raw response (first 500 chars):', orderText.substring(0, 500));
         
-        if (!orderText) {
+        if (!orderText || orderText.trim() === '') {
             console.error('❌ Empty response from 5sim');
-            return res.status(500).json({ error: 'Empty response from provider. Try again.' });
-        }
-        
-        let orderData;
-        try {
-            orderData = JSON.parse(orderText);
-        } catch (parseErr) {
-            console.error('❌ JSON parse error:', parseErr);
-            console.error('Response:', orderText.substring(0, 300));
-            return res.status(500).json({ error: 'Invalid response from SMS provider' });
-        }
-        
-        if (!orderRes.ok) {
-            console.error('❌ 5sim error:', orderData);
+            console.error('Status:', orderRes.status);
+            console.error('Headers:', Object.fromEntries(orderRes.headers.entries()));
             
-            if (orderData.message === 'no free phones') {
-                return res.status(400).json({ error: 'No phones available. Try a different operator.' });
+            // Try guest API as fallback
+            console.log('🔄 Trying guest activation API...');
+            const guestUrl = `https://5sim.net/v1/guest/buy/activation/${country}/${operator}/${service}`;
+            
+            const guestRes = await fetch(guestUrl, {
+                method: 'GET',
+                headers: {
+                    'Accept': 'application/json'
+                }
+            });
+            
+            const guestText = await guestRes.text();
+            console.log('Guest response:', guestText.substring(0, 300));
+            
+            if (!guestRes.ok || !guestText) {
+                return res.status(500).json({ error: 'No response from SMS provider. Check your internet connection.' });
             }
             
-            return res.status(400).json({ 
-                error: orderData.message || orderData.error || 'Failed to purchase SMS number' 
-            });
-        }
-        
-        if (!orderData.phone || !orderData.id) {
-            console.error('❌ Missing phone or id:', orderData);
-            return res.status(400).json({ error: 'Failed to get phone number from provider' });
+            const guestData = JSON.parse(guestText);
+            if (guestData.phone && guestData.id) {
+                orderData = guestData;
+            } else {
+                return res.status(400).json({ error: guestData.message || 'Guest API failed' });
+            }
+        } else {
+            let orderData;
+            try {
+                orderData = JSON.parse(orderText);
+            } catch (parseErr) {
+                console.error('❌ JSON parse error:', parseErr);
+                console.error('Raw text:', orderText);
+                return res.status(500).json({ error: 'Invalid JSON response from SMS provider' });
+            }
+            
+            if (!orderRes.ok) {
+                console.error('❌ 5sim API error:', orderData);
+                
+                if (orderData.message === 'no free phones') {
+                    return res.status(400).json({ error: 'No phones available. Try a different operator.' });
+                }
+                
+                return res.status(400).json({ 
+                    error: orderData.message || orderData.error || 'Failed to purchase SMS number' 
+                });
+            }
+            
+            if (!orderData.phone || !orderData.id) {
+                console.error('❌ Missing phone or id:', orderData);
+                return res.status(400).json({ error: 'Failed to get phone number from provider' });
+            }
         }
         
         // Deduct balance
