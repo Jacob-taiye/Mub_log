@@ -278,7 +278,7 @@ app.post('/api/auth/topup', async (req, res) => {
 });
 
 // ============================================
-// 🛍️ PRODUCT ROUTES
+// 🛒 PRODUCT ROUTES
 // ============================================
 
 app.get('/api/products/category/:category', async (req, res) => {
@@ -330,14 +330,14 @@ app.post('/api/products/add', async (req, res) => {
 });
 
 // ============================================
-// 🛒 PRODUCT PURCHASE
+// 🛍 PRODUCT PURCHASE
 // ============================================
 
 app.post('/api/products/purchase', async (req, res) => {
     try {
         const { userId, productId } = req.body;
         
-        console.log('🛒 Purchase attempt:', { userId, productId });
+        console.log('🛍 Purchase attempt:', { userId, productId });
         
         const userIdObj = toObjectId(userId);
         const productIdObj = toObjectId(productId);
@@ -593,7 +593,7 @@ app.get('/api/sms/admin-all-prices', async (req, res) => {
 
 app.get('/api/sms/live-config/:service', async (req, res) => {
     const service = req.params.service;
-    const EXCHANGE_RATE = 30; // 1 USD = 5 NGN
+    const EXCHANGE_RATE = 30; // 1 USD = 30 NGN
     const MARKUP_PERCENTAGE = 20; // 20% profit margin
     
     try {
@@ -608,9 +608,8 @@ app.get('/api/sms/live-config/:service', async (req, res) => {
             for (const operator of Object.keys(operators)) {
                 const info = operators[operator];
                 if (info.count > 0 && info.cost > 0) {
-                    // Formula: (API price in USD × 5) × 1.20
-                    const priceInNGN = info.cost * EXCHANGE_RATE; // Convert USD to NGN
-                    const finalPrice = Math.ceil(priceInNGN * (1 + MARKUP_PERCENTAGE / 100)); // Add 20% markup
+                    const priceInNGN = info.cost * EXCHANGE_RATE;
+                    const finalPrice = Math.ceil(priceInNGN * (1 + MARKUP_PERCENTAGE / 100));
                     
                     results.push({
                         country,
@@ -631,13 +630,15 @@ app.get('/api/sms/live-config/:service', async (req, res) => {
 });
 
 // ============================================
-// 📱 SMS ORDER - FIXED PRICING
+// 📱 SMS ORDER - FIXED PRICING WITH CANCELLATION
 // ============================================
+
+const AUTO_REFUND_TIMEOUT = 25 * 60 * 1000; // 25 minutes in milliseconds
 
 app.post('/api/sms/order', async (req, res) => {
     try {
         const { userId, service, country, operator } = req.body;
-        const EXCHANGE_RATE = 5; // 1 USD = 5 NGN
+        const EXCHANGE_RATE = 30; // 1 USD = 30 NGN
         const MARKUP_PERCENTAGE = 20; // 20% profit margin
         
         const priceRes = await fetch(`https://5sim.net/v1/guest/prices?product=${service}`);
@@ -645,7 +646,7 @@ app.post('/api/sms/order', async (req, res) => {
         
         // Calculate price using same formula
         const apiPrice = priceData[service][country][operator].cost; // Price in USD
-        const priceInNGN = apiPrice * EXCHANGE_RATE; // Convert to NGN (5 naira per dollar)
+        const priceInNGN = apiPrice * EXCHANGE_RATE; // Convert to NGN
         const finalPrice = Math.ceil(priceInNGN * (1 + MARKUP_PERCENTAGE / 100)); // Add 20% markup
         
         console.log(`💰 SMS Order pricing:`, {
@@ -683,13 +684,15 @@ app.post('/api/sms/order', async (req, res) => {
             return res.status(400).json({ error: orderData.message || 'Order failed' });
         }
         
+        // Deduct balance from user
         await getCollection('users').updateOne(
             { _id: userIdObj },
             { $inc: { balance: -finalPrice } }
         );
         
+        // Create SMS order record with expiry time
         const result = await getCollection('sms_orders').insertOne({
-            user_id: userId,
+            user_id: String(userId),
             service,
             country,
             operator,
@@ -698,70 +701,67 @@ app.post('/api/sms/order', async (req, res) => {
             activation_id: orderData.id,
             status: 'WAITING',
             sms_code: null,
-            created_at: new Date()
+            created_at: new Date(),
+            expires_at: new Date(Date.now() + AUTO_REFUND_TIMEOUT)
         });
-
-    const result = await getCollection('sms_orders').insertOne({
-    user_id: userId,
-    service,
-    country,
-    operator,
-    phone: orderData.phone,
-    price: finalPrice,
-    activation_id: orderData.id,
-    status: 'WAITING',
-    sms_code: null,
-    created_at: new Date(),
-    expires_at: new Date(Date.now() + AUTO_REFUND_TIMEOUT)
-});
-
-// Set auto-refund timeout
-setTimeout(async () => {
-    const order = await getCollection('sms_orders').findOne({ _id: result.insertedId });
-    
-    if (order && order.status === 'WAITING') {
-        // Refund the user
-        const userIdObj = toObjectId(order.user_id);
-        await getCollection('users').updateOne(
-            { _id: userIdObj },
-            { $inc: { balance: order.price } }
-        );
         
-        // Mark as expired
-        await getCollection('sms_orders').updateOne(
-            { _id: result.insertedId },
-            { $set: { status: 'EXPIRED', expired_at: new Date() } }
-        );
+        console.log(`✅ SMS order created:`, result.insertedId);
         
-        console.log(`✅ Auto-refund applied for order ${result.insertedId}`);
-    }
-}, AUTO_REFUND_TIMEOUT);
-
-res.json({
-    orderId: result.insertedId,
-    phone: orderData.phone,
-    price: finalPrice,
-    timeoutSeconds: 1500, // 25 minutes
-    message: 'SMS number purchased successfully'
-});
-        const AUTO_REFUND_TIMEOUT = 25 * 60 * 1000;
+        // Set auto-refund timeout (25 minutes)
+        setTimeout(async () => {
+            try {
+                const order = await getCollection('sms_orders').findOne({ _id: result.insertedId });
+                
+                // Only refund if order is still waiting
+                if (order && order.status === 'WAITING') {
+                    const refundUserIdObj = toObjectId(order.user_id);
+                    
+                    // Refund the user
+                    await getCollection('users').updateOne(
+                        { _id: refundUserIdObj },
+                        { $inc: { balance: order.price } }
+                    );
+                    
+                    // Mark as expired
+                    await getCollection('sms_orders').updateOne(
+                        { _id: result.insertedId },
+                        { $set: { status: 'EXPIRED', expired_at: new Date() } }
+                    );
+                    
+                    console.log(`✅ Auto-refund applied for order ${result.insertedId} - Amount: ₦${order.price}`);
+                }
+            } catch (err) {
+                console.error('❌ Auto-refund error:', err);
+            }
+        }, AUTO_REFUND_TIMEOUT);
+        
+        // Return success response
         res.json({
             orderId: result.insertedId,
             phone: orderData.phone,
             price: finalPrice,
+            timeoutSeconds: 1500, // 25 minutes
             message: 'SMS number purchased successfully'
         });
+        
     } catch (err) {
         console.error('SMS order error:', err);
         res.status(500).json({ error: err.message });
     }
 });
 
+// ============================================
+// 📱 SMS CHECK ENDPOINT
+// ============================================
+
 app.get('/api/sms/check/:orderId', async (req, res) => {
     try {
         const orderIdObj = toObjectId(req.params.orderId);
         const order = await getCollection('sms_orders').findOne({ _id: orderIdObj });
-        if (!order) return res.status(404).json({ error: 'Order not found' });
+        
+        if (!order) {
+            return res.status(404).json({ error: 'Order not found' });
+        }
         
         const checkRes = await fetch(
             `https://5sim.net/v1/user/check/${order.activation_id}`,
@@ -778,19 +778,27 @@ app.get('/api/sms/check/:orderId', async (req, res) => {
         if (data.sms && data.sms[0]) {
             const code = data.sms[0].code;
             
+            // Update order with SMS code
             await getCollection('sms_orders').updateOne(
                 { _id: orderIdObj },
                 { $set: { sms_code: code, status: 'COMPLETED' } }
             );
             
-            res.json({ code, status: 'COMPLETED' });
-        } else {
-            res.json({ code: null, status: order.status });
+            return res.json({ code, status: 'COMPLETED' });
         }
+        
+        // Return current order status
+        res.json({ code: null, status: order.status });
+        
     } catch (err) {
+        console.error('SMS check error:', err);
         res.status(500).json({ error: err.message });
     }
 });
+
+// ============================================
+// 📱 SMS CANCEL ENDPOINT
+// ============================================
 
 app.post('/api/sms/cancel/:orderId', async (req, res) => {
     try {
@@ -801,11 +809,14 @@ app.post('/api/sms/cancel/:orderId', async (req, res) => {
             return res.status(404).json({ error: 'Order not found' });
         }
         
-        if (['COMPLETED', 'CANCELLED'].includes(order.status)) {
-            return res.status(400).json({ error: 'Cannot cancel this order' });
+        // Can only cancel WAITING orders
+        if (['COMPLETED', 'CANCELLED', 'EXPIRED'].includes(order.status)) {
+            return res.status(400).json({ 
+                error: `Cannot cancel order with status: ${order.status}` 
+            });
         }
         
-        // Refund the user
+        // Refund the user balance
         const userIdObj = toObjectId(order.user_id);
         await getCollection('users').updateOne(
             { _id: userIdObj },
@@ -818,10 +829,13 @@ app.post('/api/sms/cancel/:orderId', async (req, res) => {
             { $set: { status: 'CANCELLED', cancelled_at: new Date() } }
         );
         
+        console.log(`✅ SMS order cancelled: ${orderIdObj} - Refunded: ₦${order.price}`);
+        
         res.json({ 
             message: 'Order cancelled and balance refunded',
             refundAmount: order.price
         });
+        
     } catch (err) {
         console.error('SMS cancel error:', err);
         res.status(500).json({ error: err.message });
