@@ -508,6 +508,103 @@
     </div>
 
 <script>
+
+    const ADMIN_AUTH_KEY = 'adminAuthenticated';
+
+// Check if admin is authenticated on page load
+window.addEventListener('DOMContentLoaded', () => {
+    const isAuthenticated = sessionStorage.getItem(ADMIN_AUTH_KEY);
+    
+    if (!isAuthenticated) {
+        // Redirect to auth page
+        showAdminLogin();
+    } else {
+        // Admin is authenticated, proceed normally
+        console.log('✅ Admin authenticated');
+    }
+});
+
+function showAdminLogin() {
+    // Hide all content
+    document.body.innerHTML = `
+        <div style="display: flex; align-items: center; justify-content: center; min-height: 100vh; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);">
+            <div style="background: white; padding: 40px; border-radius: 12px; box-shadow: 0 10px 40px rgba(0,0,0,0.2); width: 100%; max-width: 400px; text-align: center;">
+                <div style="font-size: 40px; margin-bottom: 20px;">🔐</div>
+                <h1 style="margin: 0 0 10px 0; color: #111827; font-size: 24px;">Admin Panel</h1>
+                <p style="color: #6b7280; margin-bottom: 30px;">Enter your admin password to continue</p>
+                
+                <input 
+                    type="password" 
+                    id="adminPasswordInput" 
+                    placeholder="Enter admin password" 
+                    style="width: 100%; padding: 12px; border: 2px solid #e5e7eb; border-radius: 8px; font-size: 16px; margin-bottom: 15px; outline: none;"
+                    onkeypress="if(event.key==='Enter') verifyAdminPassword()"
+                >
+                
+                <button 
+                    onclick="verifyAdminPassword()" 
+                    style="width: 100%; padding: 12px; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; border: none; border-radius: 8px; font-weight: 700; font-size: 16px; cursor: pointer; transition: 0.2s;"
+                    onmouseover="this.style.opacity='0.9'"
+                    onmouseout="this.style.opacity='1'"
+                >
+                    Unlock Admin Panel
+                </button>
+                
+                <p style="color: #ef4444; margin-top: 20px; font-size: 12px;" id="errorMessage"></p>
+            </div>
+        </div>
+    `;
+    
+    // Focus on input
+    setTimeout(() => document.getElementById('adminPasswordInput').focus(), 100);
+}
+
+async function verifyAdminPassword() {
+    const password = document.getElementById('adminPasswordInput').value;
+    
+    if (!password) {
+        showError('Please enter a password');
+        return;
+    }
+    
+    try {
+        // Send to backend to verify
+        const res = await fetch(`${API_BASE}/auth/verify-admin-password`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ password })
+        });
+        
+        const data = await res.json();
+        
+        if (res.ok) {
+            // Store authentication in session (not localStorage - more secure)
+            sessionStorage.setItem(ADMIN_AUTH_KEY, 'true');
+            
+            // Reload page to show admin panel
+            window.location.reload();
+        } else {
+            showError('❌ Incorrect password. Try again.');
+        }
+    } catch (err) {
+        showError('Error verifying password: ' + err.message);
+    }
+}
+
+function showError(message) {
+    const errorEl = document.getElementById('errorMessage');
+    if (errorEl) {
+        errorEl.innerText = message;
+    }
+}
+
+// Add logout button to admin panel
+function logoutAdmin() {
+    if (confirm('Are you sure you want to logout?')) {
+        sessionStorage.removeItem(ADMIN_AUTH_KEY);
+        window.location.reload();
+    }
+}
     const API_BASE = "https://mublog-backend.onrender.com/api";
 
     const getHeaders = () => ({
@@ -1071,6 +1168,7 @@ function closeEditModal() {
 </body>
 
 </html>
+
 
 
 
