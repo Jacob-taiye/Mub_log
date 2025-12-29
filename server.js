@@ -8,7 +8,27 @@ const { ObjectId } = require('mongodb');
 
 dotenv.config();
 const app = express();
-// 1. Security Headers (built-in)
+
+// ============================================
+// CORS CONFIGURATION
+// ============================================
+app.use(cors({
+    origin: [
+        'https://mublogmarketplace.name.ng',
+        'https://mublog-backend.onrender.com',
+        'http://localhost:3000',
+        'http://localhost:5500',
+        'http://127.0.0.1:5500'
+    ],
+    credentials: true,
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization']
+}));
+
+app.options('*', cors());
+app.use(express.json());
+
+// 1. Security Headers
 app.use((req, res, next) => {
     res.setHeader('X-Content-Type-Options', 'nosniff');
     res.setHeader('X-Frame-Options', 'DENY');
@@ -18,9 +38,8 @@ app.use((req, res, next) => {
     next();
 });
 
-// 2. Rate Limiting (manual)
+// 2. Rate Limiting
 const requestCounts = new Map();
-
 const rateLimit = (maxRequests, windowMs) => {
     return (req, res, next) => {
         const ip = req.ip;
@@ -43,57 +62,34 @@ const rateLimit = (maxRequests, windowMs) => {
     };
 };
 
-// 3. Apply rate limits to sensitive endpoints
-const adminLimit = rateLimit(3, 10 * 60 * 1000); // 3 attempts per 10 minutes
-const authLimit = rateLimit(5, 15 * 60 * 1000); // 5 attempts per 15 minutes
-const generalLimit = rateLimit(100, 60 * 1000); // 100 per minute
+const adminLimit = rateLimit(3, 10 * 60 * 1000);
+const authLimit = rateLimit(5, 15 * 60 * 1000);
+const generalLimit = rateLimit(100, 60 * 1000);
 
-// ============================================
-// 🔐 INPUT VALIDATION FUNCTIONS
-// ============================================
-
-const validateEmail = (email) => {
-    if (!email || typeof email !== 'string') return false;
-    const re = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-    return re.test(email) && email.length <= 254;
-};
-
-const validatePassword = (password) => {
-    if (!password || typeof password !== 'string') return false;
-    // At least 8 chars, 1 uppercase, 1 number
-    return password.length >= 8 && /[A-Z]/.test(password) && /[0-9]/.test(password);
-};
-
-const validateUsername = (username) => {
-    if (!username || typeof username !== 'string') return false;
-    // 3-50 chars, alphanumeric and underscore only
-    return username.length >= 3 && username.length <= 50 && /^[a-zA-Z0-9_]+$/.test(username);
-};
-
-const sanitizeInput = (input) => {
-    if (typeof input !== 'string') return '';
-    return input.trim().replace(/[<>\"']/g, '');
-};
-
-
-// ============================================
-// CORS CONFIGURATION
-// ============================================
-app.use(cors({
-    origin: [
-        'https://mublogmarketplace.name.ng',
-        'https://mublog-backend.onrender.com',
-        'http://localhost:3000',
-        'http://localhost:5500',
-        'http://127.0.0.1:5500'
-    ],
-    credentials: true,
-    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization']
+// 3. INPUT SANITIZATION MIDDLEWARE
+app.use(express.json({
+    verify: (req, res, buf) => {
+        if (buf.includes('<script') || buf.includes('javascript:')) {
+            throw new Error('Suspicious content detected');
+        }
+    }
 }));
 
-app.options('*', cors());
-app.use(express.json());
+// 4. PROTECTION AGAINST COMMON ATTACKS
+
+// Log all requests
+app.use((req, res, next) => {
+    console.log(`[${new Date().toISOString()}] ${req.method} ${req.path} - IP: ${req.ip}`);
+    next();
+});
+
+// Prevent parameter pollution
+app.use((req, res, next) => {
+    if (Array.isArray(req.query) || Array.isArray(req.body)) {
+        return res.status(400).json({ error: 'Invalid request format' });
+    }
+    next();
+});
 
 // ============================================
 // MONGODB CONNECTION
