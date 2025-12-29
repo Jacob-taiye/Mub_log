@@ -747,8 +747,11 @@ async function loadAllSales() {
                     <td><span class="balance-amt">₦${parseFloat(u.balance || 0).toLocaleString()}</span></td>
                     <td>
                         <button class="btn-action" onclick="topUp('${userIdStr}', '${u.username}')">
-                            Add Cash
-                        </button>
+    Add Cash
+</button>
+<button style="background: #ef4444; color: white; padding: 6px 12px; border-radius: 4px; font-size: 12px; font-weight: 600; border: none; cursor: pointer; margin-left: 5px;" onclick="deleteUser('${userIdStr}', '${u.username}')">
+    Delete User
+</button>
                     </td>
                 </tr>
             `;
@@ -1032,10 +1035,43 @@ function closeEditModal() {
         loadDashboardStats();
         loadCurrentAnnouncement();
     };
+
+    async function deleteUser(userId, username) {
+    if (!confirm(`⚠️ Are you sure you want to DELETE ${username}? This cannot be undone!`)) {
+        return;
+    }
+    
+    const adminPassword = prompt('Enter admin password to confirm deletion:');
+    if (!adminPassword) return;
+    
+    try {
+        const res = await fetch(`${API_BASE}/auth/user/${userId}`, {
+            method: 'DELETE',
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${localStorage.getItem('token')}`
+            },
+            body: JSON.stringify({ adminPassword })
+        });
+        
+        const data = await res.json();
+        
+        if (res.ok) {
+            alert(`✅ User ${username} deleted successfully!`);
+            loadUsers();
+            loadDashboardStats();
+        } else {
+            alert('❌ ' + (data.error || 'Failed to delete user'));
+        }
+    } catch (err) {
+        alert('❌ Error: ' + err.message);
+    }
+}
 </script>
 </body>
 
 </html>
+
 
 
 
