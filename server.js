@@ -8,6 +8,73 @@ const { ObjectId } = require('mongodb');
 
 dotenv.config();
 const app = express();
+// 1. Security Headers (built-in)
+app.use((req, res, next) => {
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader('X-Frame-Options', 'DENY');
+    res.setHeader('X-XSS-Protection', '1; mode=block');
+    res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
+    res.setHeader('Content-Security-Policy', "default-src 'self'; script-src 'self' 'unsafe-inline' cdnjs.cloudflare.com checkout.flutterwave.com; style-src 'self' 'unsafe-inline' fonts.googleapis.com; font-src fonts.gstatic.com cdnjs.cloudflare.com; connect-src 'self' api.flutterwave.com 5sim.net reallysimplesocial.com");
+    next();
+});
+
+// 2. Rate Limiting (manual)
+const requestCounts = new Map();
+
+const rateLimit = (maxRequests, windowMs) => {
+    return (req, res, next) => {
+        const ip = req.ip;
+        const now = Date.now();
+        
+        if (!requestCounts.has(ip)) {
+            requestCounts.set(ip, []);
+        }
+        
+        const requests = requestCounts.get(ip);
+        const recentRequests = requests.filter(time => now - time < windowMs);
+        
+        if (recentRequests.length >= maxRequests) {
+            return res.status(429).json({ error: 'Too many requests. Try again later.' });
+        }
+        
+        recentRequests.push(now);
+        requestCounts.set(ip, recentRequests);
+        next();
+    };
+};
+
+// 3. Apply rate limits to sensitive endpoints
+const adminLimit = rateLimit(3, 10 * 60 * 1000); // 3 attempts per 10 minutes
+const authLimit = rateLimit(5, 15 * 60 * 1000); // 5 attempts per 15 minutes
+const generalLimit = rateLimit(100, 60 * 1000); // 100 per minute
+
+// ============================================
+// 🔐 INPUT VALIDATION FUNCTIONS
+// ============================================
+
+const validateEmail = (email) => {
+    if (!email || typeof email !== 'string') return false;
+    const re = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    return re.test(email) && email.length <= 254;
+};
+
+const validatePassword = (password) => {
+    if (!password || typeof password !== 'string') return false;
+    // At least 8 chars, 1 uppercase, 1 number
+    return password.length >= 8 && /[A-Z]/.test(password) && /[0-9]/.test(password);
+};
+
+const validateUsername = (username) => {
+    if (!username || typeof username !== 'string') return false;
+    // 3-50 chars, alphanumeric and underscore only
+    return username.length >= 3 && username.length <= 50 && /^[a-zA-Z0-9_]+$/.test(username);
+};
+
+const sanitizeInput = (input) => {
+    if (typeof input !== 'string') return '';
+    return input.trim().replace(/[<>\"']/g, '');
+};
+
 
 // ============================================
 // CORS CONFIGURATION
@@ -214,26 +281,43 @@ app.get('/api/debug/sms-test', async (req, res) => {
 // AUTH ROUTES
 // ============================================
 
-app.post('/api/auth/register', async (req, res) => {
+app.post('/api/auth/register', authLimit, async (req, res) => {
     try {
         const { username, email, password } = req.body;
         
-        const existing = await getCollection('users').findOne({ email });
+        // Input validation
+        if (!validateUsername(username)) {
+            return res.status(400).json({ error: "Username must be 3-50 alphanumeric characters" });
+        }
+        
+        if (!validateEmail(email)) {
+            return res.status(400).json({ error: "Invalid email format" });
+        }
+        
+        if (!validatePassword(password)) {
+            return res.status(400).json({ error: "Password must be 8+ chars with uppercase and number" });
+        }
+        
+        // Check if user exists
+        const existing = await getCollection('users').findOne({ email: email.toLowerCase() });
         if (existing) {
             return res.status(400).json({ error: "Email already exists" });
         }
         
-        const salt = await bcryptjs.genSalt(10);
+        // Hash password with strong salt
+        const salt = await bcryptjs.genSalt(12);
         const hashedPassword = await bcryptjs.hash(password, salt);
         
         const result = await getCollection('users').insertOne({
-            username,
-            email,
+            username: sanitizeInput(username),
+            email: email.toLowerCase(),
             password: hashedPassword,
             balance: 0,
             role: 'user',
             createdAt: new Date()
         });
+        
+        console.log(`✅ New user registered: ${email}`);
         
         res.status(201).json({ msg: "User created successfully!", userId: result.insertedId });
     } catch (err) {
@@ -241,18 +325,30 @@ app.post('/api/auth/register', async (req, res) => {
         res.status(500).json({ error: "Registration failed" });
     }
 });
-
-app.post('/api/auth/login', async (req, res) => {
+app.post('/api/auth/login', authLimit, async (req, res) => {
     try {
         const { email, password } = req.body;
+        const clientIp = req.ip;
         
-        const user = await getCollection('users').findOne({ email });
-        if (!user) return res.status(400).json({ msg: "User not found" });
+        if (!email || !password) {
+            return res.status(400).json({ msg: "Email and password required" });
+        }
+        
+        const user = await getCollection('users').findOne({ email: email.toLowerCase() });
+        if (!user) {
+            console.log(`⚠️ Login attempt for non-existent user: ${email} from ${clientIp}`);
+            return res.status(400).json({ msg: "Invalid credentials" });
+        }
         
         const isMatch = await bcryptjs.compare(password, user.password);
-        if (!isMatch) return res.status(400).json({ msg: "Invalid password" });
+        if (!isMatch) {
+            console.log(`⚠️ Failed login attempt: ${email} from ${clientIp}`);
+            return res.status(400).json({ msg: "Invalid credentials" });
+        }
         
         const token = createToken({ userId: user._id, email: user.email });
+        
+        console.log(`✅ Login: ${email} from ${clientIp}`);
         
         res.json({
             msg: "Login successful",
@@ -1210,9 +1306,24 @@ app.post('/api/smm/order', async (req, res) => {
 // 🔐 VERIFY ADMIN PASSWORD ENDPOINT
 // ============================================
 
-app.post('/api/auth/verify-admin-password', async (req, res) => {
+const adminFailedAttempts = new Map();
+
+app.post('/api/auth/verify-admin-password', adminLimit, async (req, res) => {
     try {
         const { password } = req.body;
+        const clientIp = req.ip;
+        
+        // Check failed attempts
+        const attempts = adminFailedAttempts.get(clientIp) || 0;
+        if (attempts >= 3) {
+            console.log(`🚫 Admin lockout for IP: ${clientIp}`);
+            return res.status(429).json({ error: 'Too many failed attempts. Try again in 10 minutes.' });
+        }
+        
+        if (!password || typeof password !== 'string' || password.length === 0) {
+            adminFailedAttempts.set(clientIp, attempts + 1);
+            return res.status(400).json({ error: 'Invalid password' });
+        }
         
         const adminPassword = process.env.ADMIN_PASSWORD;
         
@@ -1220,13 +1331,20 @@ app.post('/api/auth/verify-admin-password', async (req, res) => {
             return res.status(500).json({ error: 'Admin password not configured' });
         }
         
+        // Simple comparison (timing-safe comparison not needed for passwords)
         if (password === adminPassword) {
+            adminFailedAttempts.delete(clientIp);
+            console.log(`✅ Admin authenticated from IP: ${clientIp}`);
             return res.json({ message: 'Password verified' });
         } else {
+            const newAttempts = attempts + 1;
+            adminFailedAttempts.set(clientIp, newAttempts);
+            console.log(`❌ Failed admin attempt from IP: ${clientIp} (${newAttempts}/3)`);
             return res.status(401).json({ error: 'Incorrect password' });
         }
     } catch (err) {
-        res.status(500).json({ error: err.message });
+        console.error('Admin auth error:', err);
+        res.status(500).json({ error: 'Authentication error' });
     }
 });
 
