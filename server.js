@@ -1183,6 +1183,30 @@ app.post('/api/smm/order', async (req, res) => {
 });
 
 // ============================================
+// 🔐 VERIFY ADMIN PASSWORD ENDPOINT
+// ============================================
+
+app.post('/api/auth/verify-admin-password', async (req, res) => {
+    try {
+        const { password } = req.body;
+        
+        const adminPassword = process.env.ADMIN_PASSWORD;
+        
+        if (!adminPassword) {
+            return res.status(500).json({ error: 'Admin password not configured' });
+        }
+        
+        if (password === adminPassword) {
+            return res.json({ message: 'Password verified' });
+        } else {
+            return res.status(401).json({ error: 'Incorrect password' });
+        }
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// ============================================
 // 🚀 START SERVER
 // ============================================
 
