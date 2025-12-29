@@ -8,7 +8,10 @@ const { ObjectId } = require('mongodb');
 
 dotenv.config();
 const app = express();
-// 1. Security Headers (built-in)
+
+// ============================================
+// 🔒 MIDDLEWARE - SECURITY HEADERS
+// ============================================
 app.use((req, res, next) => {
     res.setHeader('X-Content-Type-Options', 'nosniff');
     res.setHeader('X-Frame-Options', 'DENY');
@@ -18,7 +21,9 @@ app.use((req, res, next) => {
     next();
 });
 
-// 2. Rate Limiting (manual)
+// ============================================
+// 🔒 MIDDLEWARE - RATE LIMITING
+// ============================================
 const requestCounts = new Map();
 
 const rateLimit = (maxRequests, windowMs) => {
@@ -43,15 +48,13 @@ const rateLimit = (maxRequests, windowMs) => {
     };
 };
 
-// 3. Apply rate limits to sensitive endpoints
 const adminLimit = rateLimit(3, 10 * 60 * 1000); // 3 attempts per 10 minutes
 const authLimit = rateLimit(5, 15 * 60 * 1000); // 5 attempts per 15 minutes
 const generalLimit = rateLimit(100, 60 * 1000); // 100 per minute
 
 // ============================================
-// 🔐 INPUT VALIDATION FUNCTIONS
+// 🔍 INPUT VALIDATION FUNCTIONS
 // ============================================
-
 const validateEmail = (email) => {
     if (!email || typeof email !== 'string') return false;
     const re = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -60,13 +63,11 @@ const validateEmail = (email) => {
 
 const validatePassword = (password) => {
     if (!password || typeof password !== 'string') return false;
-    // At least 8 chars, 1 uppercase, 1 number
     return password.length >= 8 && /[A-Z]/.test(password) && /[0-9]/.test(password);
 };
 
 const validateUsername = (username) => {
     if (!username || typeof username !== 'string') return false;
-    // 3-50 chars, alphanumeric and underscore only
     return username.length >= 3 && username.length <= 50 && /^[a-zA-Z0-9_]+$/.test(username);
 };
 
@@ -75,9 +76,8 @@ const sanitizeInput = (input) => {
     return input.trim().replace(/[<>\"']/g, '');
 };
 
-
 // ============================================
-// CORS CONFIGURATION
+// 🔒 MIDDLEWARE - CORS CONFIGURATION
 // ============================================
 app.use(cors({
     origin: [
@@ -96,7 +96,7 @@ app.options('*', cors());
 app.use(express.json());
 
 // ============================================
-// MONGODB CONNECTION
+// 💾 DATABASE CONNECTION & SETUP
 // ============================================
 let db = null;
 
@@ -180,9 +180,8 @@ class InMemoryCollection {
 connectDB();
 
 // ============================================
-// HELPER FUNCTIONS
+// 🛠️ HELPER FUNCTIONS
 // ============================================
-
 function getCollection(name) {
     return db ? db.collection(name) : new InMemoryCollection(name);
 }
@@ -208,9 +207,8 @@ const createToken = (data) => {
 };
 
 // ============================================
-// 🧪 HEALTH CHECK ENDPOINTS
+// 🧪 HEALTH CHECK & DEBUG ENDPOINTS
 // ============================================
-
 app.get('/api/test', (req, res) => {
     res.json({ message: "✅ Server is running!" });
 });
@@ -223,10 +221,6 @@ app.get('/api/health', (req, res) => {
     });
 });
 
-// ============================================
-// 🔧 DEBUG: TEST SMS API KEY
-// ============================================
-
 app.get('/api/debug/sms-test', async (req, res) => {
     try {
         console.log('🔧 Testing SMS API...');
@@ -236,15 +230,13 @@ app.get('/api/debug/sms-test', async (req, res) => {
         console.log('API Key length:', apiKey ? apiKey.length : 0);
         console.log('API Key starts with:', apiKey ? apiKey.substring(0, 10) : 'N/A');
         
-        // Test 1: Guest API (no auth)
-        console.log('\n📍 Test 1: Guest Prices API (no auth)...');
+        console.log('\n🔍 Test 1: Guest Prices API (no auth)...');
         const guestPricesRes = await fetch('https://5sim.net/v1/guest/prices?product=whatsapp');
         const guestPricesText = await guestPricesRes.text();
         console.log('Status:', guestPricesRes.status);
         console.log('Response (first 200 chars):', guestPricesText.substring(0, 200));
         
-        // Test 2: User API with key
-        console.log('\n📍 Test 2: User API (with auth)...');
+        console.log('\n🔍 Test 2: User API (with auth)...');
         const userRes = await fetch('https://5sim.net/v1/user/profile', {
             headers: {
                 'Authorization': `Bearer ${apiKey}`,
@@ -278,14 +270,12 @@ app.get('/api/debug/sms-test', async (req, res) => {
 });
 
 // ============================================
-// AUTH ROUTES
+// 🔐 AUTH ROUTES
 // ============================================
-
 app.post('/api/auth/register', authLimit, async (req, res) => {
     try {
         const { username, email, password } = req.body;
         
-        // Input validation
         if (!validateUsername(username)) {
             return res.status(400).json({ error: "Username must be 3-50 alphanumeric characters" });
         }
@@ -298,13 +288,11 @@ app.post('/api/auth/register', authLimit, async (req, res) => {
             return res.status(400).json({ error: "Password must be 8+ chars with uppercase and number" });
         }
         
-        // Check if user exists
         const existing = await getCollection('users').findOne({ email: email.toLowerCase() });
         if (existing) {
             return res.status(400).json({ error: "Email already exists" });
         }
         
-        // Hash password with strong salt
         const salt = await bcryptjs.genSalt(12);
         const hashedPassword = await bcryptjs.hash(password, salt);
         
@@ -325,6 +313,7 @@ app.post('/api/auth/register', authLimit, async (req, res) => {
         res.status(500).json({ error: "Registration failed" });
     }
 });
+
 app.post('/api/auth/login', authLimit, async (req, res) => {
     try {
         const { email, password } = req.body;
@@ -367,6 +356,49 @@ app.post('/api/auth/login', authLimit, async (req, res) => {
     }
 });
 
+const adminFailedAttempts = new Map();
+
+app.post('/api/auth/verify-admin-password', adminLimit, async (req, res) => {
+    try {
+        const { password } = req.body;
+        const clientIp = req.ip;
+        
+        const attempts = adminFailedAttempts.get(clientIp) || 0;
+        if (attempts >= 3) {
+            console.log(`🚫 Admin lockout for IP: ${clientIp}`);
+            return res.status(429).json({ error: 'Too many failed attempts. Try again in 10 minutes.' });
+        }
+        
+        if (!password || typeof password !== 'string' || password.length === 0) {
+            adminFailedAttempts.set(clientIp, attempts + 1);
+            return res.status(400).json({ error: 'Invalid password' });
+        }
+        
+        const adminPassword = process.env.ADMIN_PASSWORD;
+        
+        if (!adminPassword) {
+            return res.status(500).json({ error: 'Admin password not configured' });
+        }
+        
+        if (password === adminPassword) {
+            adminFailedAttempts.delete(clientIp);
+            console.log(`✅ Admin authenticated from IP: ${clientIp}`);
+            return res.json({ message: 'Password verified' });
+        } else {
+            const newAttempts = attempts + 1;
+            adminFailedAttempts.set(clientIp, newAttempts);
+            console.log(`❌ Failed admin attempt from IP: ${clientIp} (${newAttempts}/3)`);
+            return res.status(401).json({ error: 'Incorrect password' });
+        }
+    } catch (err) {
+        console.error('Admin auth error:', err);
+        res.status(500).json({ error: 'Authentication error' });
+    }
+});
+
+// ============================================
+// 👤 USER MANAGEMENT ROUTES
+// ============================================
 app.get('/api/auth/users', async (req, res) => {
     try {
         const users = await getCollection('users').find({}).toArray();
@@ -428,56 +460,25 @@ app.post('/api/auth/topup', async (req, res) => {
     }
 });
 
-// ============================================
-// 🔐 VERIFY ADMIN PASSWORD ENDPOINT
-// ============================================
-
-app.post('/api/auth/verify-admin-password', async (req, res) => {
-    try {
-        const { password } = req.body;
-        
-        const adminPassword = process.env.ADMIN_PASSWORD;
-        
-        if (!adminPassword) {
-            return res.status(500).json({ error: 'Admin password not configured' });
-        }
-        
-        if (password === adminPassword) {
-            return res.json({ message: 'Password verified' });
-        } else {
-            return res.status(401).json({ error: 'Incorrect password' });
-        }
-    } catch (err) {
-        res.status(500).json({ error: err.message });
-    }
-});
-
 app.delete('/api/auth/user/:userId', async (req, res) => {
     try {
         const userId = req.params.userId;
-        const adminPassword = req.body.adminPassword; // Password protection
+        const adminPassword = req.body.adminPassword;
         
-        // Simple admin password check
         if (adminPassword !== process.env.ADMIN_PASSWORD) {
             return res.status(401).json({ error: 'Unauthorized - incorrect admin password' });
         }
         
         const userIdObj = toObjectId(userId);
         
-        // Delete user
         const userResult = await getCollection('users').deleteOne({ _id: userIdObj });
         
         if (userResult.deletedCount === 0) {
             return res.status(404).json({ error: 'User not found' });
         }
         
-        // Also delete their orders
         await getCollection('orders').deleteOne({ user_id: String(userId) });
-        
-        // Delete their SMS orders
         await getCollection('sms_orders').deleteOne({ user_id: String(userId) });
-        
-        // Delete their transactions
         await getCollection('transactions').deleteOne({ user_id: String(userId) });
         
         console.log(`🗑️ User deleted: ${userId}`);
@@ -494,9 +495,8 @@ app.delete('/api/auth/user/:userId', async (req, res) => {
 });
 
 // ============================================
-// 🛒 PRODUCT ROUTES
+// 🛍️ PRODUCT ROUTES
 // ============================================
-
 app.get('/api/products/category/:category', async (req, res) => {
     try {
         const products = await getCollection('products').find({
@@ -545,15 +545,11 @@ app.post('/api/products/add', async (req, res) => {
     }
 });
 
-// ============================================
-// 🛍 PRODUCT PURCHASE
-// ============================================
-
 app.post('/api/products/purchase', async (req, res) => {
     try {
         const { userId, productId } = req.body;
         
-        console.log('🛍 Purchase attempt:', { userId, productId });
+        console.log('🛒 Purchase attempt:', { userId, productId });
         
         const userIdObj = toObjectId(userId);
         const productIdObj = toObjectId(productId);
@@ -614,21 +610,18 @@ async function processPurchase(userId, user, product, res) {
             });
         }
         
-        // Check if product is permanent (Tools or Format) or has stock
         const isPermanent = ['Tools', 'Format'].includes(product.category);
         
         if (!isPermanent && product.stock < 1) {
             return res.status(400).json({ error: "Product out of stock" });
         }
         
-        // Deduct balance
         await getCollection('users').updateOne(
             { _id: userId },
             { $inc: { balance: -product.price } }
         );
         console.log('✅ Balance deducted');
         
-        // Only reduce stock if NOT a permanent service
         if (!isPermanent) {
             await getCollection('products').updateOne(
                 { _id: product._id },
@@ -639,7 +632,6 @@ async function processPurchase(userId, user, product, res) {
             console.log('🔄 Permanent service - stock not reduced');
         }
         
-        // Create order record
         const orderDetails = `LOGIN: ${product.credentials}\nLINK: ${product.public_link}`;
         await getCollection('orders').insertOne({
             user_id: String(userId),
@@ -676,9 +668,8 @@ app.delete('/api/products/delete/:id', async (req, res) => {
 });
 
 // ============================================
-// 📋 ORDERS ROUTES
+// 📋 ORDER ROUTES
 // ============================================
-
 app.get('/api/orders/all/:userId', async (req, res) => {
     try {
         const userId = req.params.userId;
@@ -692,7 +683,6 @@ app.get('/api/orders/all/:userId', async (req, res) => {
 // ============================================
 // 📱 SMS ROUTES
 // ============================================
-
 app.get('/api/sms/available-services', async (req, res) => {
     try {
         const services = await getCollection('allowed_services').find({}).toArray();
@@ -751,10 +741,6 @@ app.get('/api/sms/admin-all-prices', async (req, res) => {
     }
 });
 
-// ============================================
-// 📱 SMS LIVE CONFIG - FIXED PRICING
-// ============================================
-
 app.get('/api/sms/live-config/:service', async (req, res) => {
     const service = req.params.service;
     const EXCHANGE_RATE = 30;
@@ -793,10 +779,6 @@ app.get('/api/sms/live-config/:service', async (req, res) => {
     }
 });
 
-// ============================================
-// 📱 SMS ORDER WITH CANCELLATION & TIMER
-// ============================================
-
 const AUTO_REFUND_TIMEOUT = 25 * 60 * 1000;
 
 app.post('/api/sms/order', async (req, res) => {
@@ -805,7 +787,7 @@ app.post('/api/sms/order', async (req, res) => {
         const EXCHANGE_RATE = 30;
         const MARKUP_PERCENTAGE = 20;
         
-        console.log('🔱 SMS Order Request:', { userId, service, country, operator });
+        console.log('📱 SMS Order Request:', { userId, service, country, operator });
         
         if (!userId || !service || !country || !operator) {
             return res.status(400).json({ error: 'Missing required fields' });
@@ -816,7 +798,6 @@ app.post('/api/sms/order', async (req, res) => {
             return res.status(500).json({ error: 'SMS service not configured' });
         }
         
-        // Get prices
         const priceRes = await fetch(`https://5sim.net/v1/guest/prices?product=${service}`);
         if (!priceRes.ok) {
             return res.status(400).json({ error: 'Failed to fetch prices' });
@@ -834,7 +815,6 @@ app.post('/api/sms/order', async (req, res) => {
         
         console.log(`💰 Pricing:`, { apiPrice, finalPrice });
         
-        // Check user balance
         const userIdObj = toObjectId(userId);
         const user = await getCollection('users').findOne({ _id: userIdObj });
         
@@ -848,13 +828,11 @@ app.post('/api/sms/order', async (req, res) => {
             });
         }
         
-        // Verify API key exists
         if (!process.env.FIVESIM_API_KEY) {
             console.error('❌ FIVESIM_API_KEY not configured in .env');
             return res.status(500).json({ error: 'SMS service not configured. Contact admin.' });
         }
         
-        // Create SMS order with API key - using proxy to bypass Cloudflare
         const orderUrl = `https://5sim.net/v1/user/buy/activation/${country}/${operator}/${service}`;
         console.log('📞 Creating SMS order...');
         console.log('Service:', service);
@@ -864,10 +842,7 @@ app.post('/api/sms/order', async (req, res) => {
         let orderData;
         
         try {
-            // Try multiple approaches to bypass Cloudflare
-            
-            // Approach 1: Try with axios (sometimes works better)
-            console.log('🔑 Trying with axios...');
+            console.log('🔐 Trying with axios...');
             try {
                 const response = await axios.get(orderUrl, {
                     headers: {
@@ -883,7 +858,6 @@ app.post('/api/sms/order', async (req, res) => {
             } catch (axiosErr) {
                 console.log('⚠️ Axios failed, trying fetch with timeout...');
                 
-                // Approach 2: Fetch with timeout
                 const controller = new AbortController();
                 const timeout = setTimeout(() => controller.abort(), 15000);
                 
@@ -908,11 +882,9 @@ app.post('/api/sms/order', async (req, res) => {
                 console.log('📦 Response length:', orderText.length);
                 console.log('📦 First 200 chars:', orderText.substring(0, 200));
                 
-                // Check if it's Cloudflare
                 if (orderText.includes('challenge-platform') || orderText.includes('Just a moment')) {
                     console.log('⚠️ Cloudflare detected, trying guest endpoint...');
                     
-                    // Use guest endpoint as last resort
                     const guestUrl = `https://5sim.net/v1/guest/buy/activation/${country}/${operator}/${service}`;
                     const guestRes = await fetch(guestUrl, {
                         method: 'GET',
@@ -936,7 +908,6 @@ app.post('/api/sms/order', async (req, res) => {
                 }
             }
             
-            // Validate phone data
             if (!orderData || !orderData.phone || !orderData.id) {
                 console.error('❌ No phone in response:', orderData);
                 return res.status(400).json({ error: 'Could not retrieve phone number. Try again.' });
@@ -954,13 +925,11 @@ app.post('/api/sms/order', async (req, res) => {
             return res.status(500).json({ error: err.message });
         }
         
-        // Deduct balance
         await getCollection('users').updateOne(
             { _id: userIdObj },
             { $inc: { balance: -finalPrice } }
         );
         
-        // Create order record
         const result = await getCollection('sms_orders').insertOne({
             user_id: String(userId),
             service,
@@ -977,7 +946,6 @@ app.post('/api/sms/order', async (req, res) => {
         
         console.log('✅ SMS order created:', result.insertedId);
         
-        // Auto-refund after 25 minutes
         setTimeout(async () => {
             try {
                 const order = await getCollection('sms_orders').findOne({ _id: result.insertedId });
@@ -1015,10 +983,6 @@ app.post('/api/sms/order', async (req, res) => {
         return res.status(500).json({ error: err.message || 'Internal server error' });
     }
 });
-
-// ============================================
-// 📱 SMS CHECK ENDPOINT
-// ============================================
 
 app.get('/api/sms/check/:orderId', async (req, res) => {
     try {
@@ -1076,10 +1040,6 @@ app.get('/api/sms/check/:orderId', async (req, res) => {
     }
 });
 
-// ============================================
-// 📱 SMS CANCEL ENDPOINT
-// ============================================
-
 app.post('/api/sms/cancel/:orderId', async (req, res) => {
     try {
         const orderIdObj = toObjectId(req.params.orderId);
@@ -1118,9 +1078,8 @@ app.post('/api/sms/cancel/:orderId', async (req, res) => {
 });
 
 // ============================================
-// 💳 TRANSACTIONS ROUTES
+// 💳 TRANSACTION ROUTES
 // ============================================
-
 app.get('/api/auth/transactions/:userId', async (req, res) => {
     try {
         const userId = req.params.userId;
@@ -1174,9 +1133,8 @@ app.post('/api/auth/verify-payment', async (req, res) => {
 });
 
 // ============================================
-// 📢 ANNOUNCEMENTS
+// 📢 ANNOUNCEMENT ROUTES
 // ============================================
-
 app.get('/api/announcement', async (req, res) => {
     try {
         const announcements = await getCollection('announcements')
@@ -1224,9 +1182,8 @@ app.delete('/api/admin/announcement', async (req, res) => {
 });
 
 // ============================================
-// 🎉 SMM SERVICES
+// 🎉 SMM SERVICE ROUTES
 // ============================================
-
 app.get('/api/smm/live-services', async (req, res) => {
     try {
         const response = await axios.get('https://reallysimplesocial.com/api/v2', {
@@ -1303,63 +1260,10 @@ app.post('/api/smm/order', async (req, res) => {
 });
 
 // ============================================
-// 🔐 VERIFY ADMIN PASSWORD ENDPOINT
+// 🚀 SERVER STARTUP
 // ============================================
-
-const adminFailedAttempts = new Map();
-
-app.post('/api/auth/verify-admin-password', adminLimit, async (req, res) => {
-    try {
-        const { password } = req.body;
-        const clientIp = req.ip;
-        
-        // Check failed attempts
-        const attempts = adminFailedAttempts.get(clientIp) || 0;
-        if (attempts >= 3) {
-            console.log(`🚫 Admin lockout for IP: ${clientIp}`);
-            return res.status(429).json({ error: 'Too many failed attempts. Try again in 10 minutes.' });
-        }
-        
-        if (!password || typeof password !== 'string' || password.length === 0) {
-            adminFailedAttempts.set(clientIp, attempts + 1);
-            return res.status(400).json({ error: 'Invalid password' });
-        }
-        
-        const adminPassword = process.env.ADMIN_PASSWORD;
-        
-        if (!adminPassword) {
-            return res.status(500).json({ error: 'Admin password not configured' });
-        }
-        
-        // Simple comparison (timing-safe comparison not needed for passwords)
-        if (password === adminPassword) {
-            adminFailedAttempts.delete(clientIp);
-            console.log(`✅ Admin authenticated from IP: ${clientIp}`);
-            return res.json({ message: 'Password verified' });
-        } else {
-            const newAttempts = attempts + 1;
-            adminFailedAttempts.set(clientIp, newAttempts);
-            console.log(`❌ Failed admin attempt from IP: ${clientIp} (${newAttempts}/3)`);
-            return res.status(401).json({ error: 'Incorrect password' });
-        }
-    } catch (err) {
-        console.error('Admin auth error:', err);
-        res.status(500).json({ error: 'Authentication error' });
-    }
-});
-
-// ============================================
-// 🚀 START SERVER
-// ============================================
-
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => {
     console.log(`🚀 Server running on http://localhost:${PORT}`);
     console.log(`📊 Database: ${process.env.MONGODB_URI || 'MongoDB'}`);
     console.log(`✅ All routes loaded!`);
-});
-
-process.on('SIGINT', () => {
-    console.log('\n👋 Server shutting down...');
-    process.exit(0);
-});
