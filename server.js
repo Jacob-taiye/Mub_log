@@ -332,6 +332,47 @@ app.post('/api/auth/topup', async (req, res) => {
     }
 });
 
+app.delete('/api/auth/user/:userId', async (req, res) => {
+    try {
+        const userId = req.params.userId;
+        const adminPassword = req.body.adminPassword; // Password protection
+        
+        // Simple admin password check
+        if (adminPassword !== process.env.ADMIN_PASSWORD) {
+            return res.status(401).json({ error: 'Unauthorized - incorrect admin password' });
+        }
+        
+        const userIdObj = toObjectId(userId);
+        
+        // Delete user
+        const userResult = await getCollection('users').deleteOne({ _id: userIdObj });
+        
+        if (userResult.deletedCount === 0) {
+            return res.status(404).json({ error: 'User not found' });
+        }
+        
+        // Also delete their orders
+        await getCollection('orders').deleteOne({ user_id: String(userId) });
+        
+        // Delete their SMS orders
+        await getCollection('sms_orders').deleteOne({ user_id: String(userId) });
+        
+        // Delete their transactions
+        await getCollection('transactions').deleteOne({ user_id: String(userId) });
+        
+        console.log(`🗑️ User deleted: ${userId}`);
+        
+        res.json({ 
+            message: 'User deleted successfully',
+            deletedUserId: userId
+        });
+        
+    } catch (err) {
+        console.error('Delete user error:', err);
+        res.status(500).json({ error: err.message });
+    }
+});
+
 // ============================================
 // 🛒 PRODUCT ROUTES
 // ============================================
